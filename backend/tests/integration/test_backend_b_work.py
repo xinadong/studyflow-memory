@@ -7,8 +7,9 @@ from sqlalchemy import create_engine
 from sqlalchemy import delete
 from sqlalchemy.orm import sessionmaker
 
-from app.api.dependencies import get_db
+from app.api.dependencies import get_db, get_llm
 from app.infrastructure.database import Base
+from app.infrastructure.llm.adapter import UnconfiguredLLMAdapter
 from app.main import app
 
 
@@ -93,15 +94,19 @@ class BackendBWorkTests(unittest.TestCase):
         self.assertEqual(response.json()["memories"][0]["confirmation_status"], "pending")
 
     def test_plan_endpoint_reports_failure_without_model_configuration(self):
-        response = self.client.post(
-            "/agent/plan",
-            json={
-                "user_id": "u1",
-                "course": "数据结构与算法",
-                "goal": "学习图的 BFS",
-                "available_minutes": 25,
-            },
-        )
+        app.dependency_overrides[get_llm] = lambda: UnconfiguredLLMAdapter("test-model")
+        try:
+            response = self.client.post(
+                "/agent/plan",
+                json={
+                    "user_id": "u1",
+                    "course": "数据结构与算法",
+                    "goal": "学习图的 BFS",
+                    "available_minutes": 25,
+                },
+            )
+        finally:
+            app.dependency_overrides.pop(get_llm, None)
         self.assertEqual(response.status_code, 503)
         body = response.json()
         self.assertEqual(body["detail"]["code"], "model_not_configured")

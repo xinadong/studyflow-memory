@@ -50,8 +50,13 @@ def _minutes(content: str) -> int | None:
 def _json_object(text: str | None) -> dict[str, Any]:
     if not text:
         raise LLMCallError("invalid_model_output", "模型调用失败：模型未返回最终结果")
+    candidate = text.strip()
+    if candidate.startswith("```") and candidate.endswith("```"):
+        lines = candidate.splitlines()
+        if len(lines) >= 3 and lines[0].strip().startswith("```"):
+            candidate = "\n".join(lines[1:-1]).strip()
     try:
-        value = json.loads(text)
+        value = json.loads(candidate)
     except ValueError as error:
         raise LLMCallError("invalid_model_output", "模型调用失败：模型结果不是有效 JSON") from error
     if not isinstance(value, dict):

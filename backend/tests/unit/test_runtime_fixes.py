@@ -1,5 +1,7 @@
 import unittest
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 from sqlalchemy import create_engine, inspect, text
 
@@ -53,13 +55,15 @@ class RuntimeFixTests(unittest.TestCase):
         }.issubset(columns))
 
     def test_unconfigured_adapter_reports_failure_when_chat_is_called(self):
-        settings = get_settings()
-        if settings.llm_base_url and settings.llm_api_key:
-            self.skipTest("local environment has a configured model")
-        adapter = get_llm_adapter()
-        with self.assertRaises(LLMCallError) as caught:
-            adapter.chat([{"role": "user", "content": "test"}])
-        self.assertEqual(caught.exception.code, "model_not_configured")
+        with patch.dict(os.environ, {"LLM_BASE_URL": "", "LLM_API_KEY": ""}, clear=False):
+            get_settings.cache_clear()
+            try:
+                adapter = get_llm_adapter()
+                with self.assertRaises(LLMCallError) as caught:
+                    adapter.chat([{"role": "user", "content": "test"}])
+                self.assertEqual(caught.exception.code, "model_not_configured")
+            finally:
+                get_settings.cache_clear()
 
     def test_backend_container_installs_dependencies_and_persists_data(self):
         root = Path(__file__).resolve().parents[3]

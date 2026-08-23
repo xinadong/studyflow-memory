@@ -4,6 +4,7 @@ import httpx
 
 from app.infrastructure.llm.adapter import LLMCallError
 from app.infrastructure.llm.client import OpenAICompatibleClient
+from app.agents.orchestrator import _json_object
 
 
 PLAN_TOOL = {
@@ -22,6 +23,12 @@ PLAN_TOOL = {
 
 
 class LLMToolCallingTests(unittest.TestCase):
+    def test_final_json_parser_accepts_a_fenced_json_object(self):
+        self.assertEqual(
+            _json_object("```json\n{\"explanation\":\"已生成任务\"}\n```"),
+            {"explanation": "已生成任务"},
+        )
+
     def test_client_sends_tools_and_parses_tool_calls_and_usage(self):
         requests = []
 
