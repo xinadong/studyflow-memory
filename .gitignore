@@ -1,0 +1,13 @@
+.env
+*.db
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+*.whl
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+.idea/
+.vscode/

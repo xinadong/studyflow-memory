@@ -1,0 +1,1 @@
+Extract explicit and candidate user preferences from the feedback.

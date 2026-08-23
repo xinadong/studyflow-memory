@@ -1,0 +1,4 @@
+Generate one low-pressure recovery action for the selected learning block.
+
+Use a supplied confirmed prior action when present. Do not infer or apply
+pending memories; the server controls which memory is reusable.

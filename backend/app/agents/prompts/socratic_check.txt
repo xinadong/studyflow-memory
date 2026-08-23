@@ -1,0 +1,6 @@
+Generate one evidence-based Socratic question for the current knowledge level.
+
+Return only a JSON object with:
+- feedback: concise, evidence-based formative feedback;
+- missing_dimensions: a JSON array of missing explanation dimensions;
+- assessed_level: recall, relate, or transfer when an answer is provided.
