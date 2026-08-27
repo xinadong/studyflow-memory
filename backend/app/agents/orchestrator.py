@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -33,6 +33,7 @@ from app.memory.retriever import (
     retrieve_memory_candidates,
     select_used_memories,
 )
+from app.memory.writer import save_feedback_memory
 
 
 PROMPT_DIR = Path(__file__).with_name("prompts")
@@ -44,7 +45,44 @@ def _prompt(name: str) -> str:
 
 def _minutes(content: str) -> int | None:
     match = re.search(r"(\d+)\s*分钟", content)
-    return int(match.group(1)) if match else None
+    if not match:
+        return None
+    value = int(match.group(1))
+    return value if 1 <= value <= 240 else None
+
+
+def _explanation_style(content: str) -> str | None:
+    explicit_markers = {
+        "example_first": (
+            "示例优先", "例子优先", "先看示例", "先给我看示例",
+            "先看例子", "先给我看例子", "先看案例",
+        ),
+        "definition_first": (
+            "定义优先", "概念优先", "先看定义", "先给我看定义",
+            "先讲定义", "先给我讲定义",
+        ),
+        "diagram_first": (
+            "图示优先", "流程图优先", "可视化优先", "先看图示",
+            "先给我看图示", "先看流程图", "先给我看流程图",
+            "先画图", "先画出图示",
+        ),
+    }
+    matches = [
+        (content.find(marker), style)
+        for style, markers in explicit_markers.items()
+        for marker in markers
+        if content.find(marker) >= 0
+    ]
+    if matches:
+        return min(matches, key=lambda item: item[0])[1]
+
+    if any(keyword in content for keyword in ("示例", "例子", "案例")):
+        return "example_first"
+    if any(keyword in content for keyword in ("定义", "概念", "术语")):
+        return "definition_first"
+    if any(keyword in content for keyword in ("图示", "画图", "可视化", "流程图")):
+        return "diagram_first"
+    return None
 
 
 def _json_object(text: str | None) -> dict[str, Any]:
@@ -58,10 +96,60 @@ def _json_object(text: str | None) -> dict[str, Any]:
     try:
         value = json.loads(candidate)
     except ValueError as error:
-        raise LLMCallError("invalid_model_output", "模型调用失败：模型结果不是有效 JSON") from error
+        decoder = json.JSONDecoder()
+        objects: list[dict[str, Any]] = []
+        cursor = 0
+        while cursor < len(candidate):
+            start = candidate.find("{", cursor)
+            if start < 0:
+                break
+            try:
+                embedded, end = decoder.raw_decode(candidate, start)
+            except ValueError:
+                cursor = start + 1
+                continue
+            if isinstance(embedded, dict):
+                objects.append(embedded)
+            cursor = max(start + 1, end)
+        if len(objects) != 1:
+            raise LLMCallError(
+                "invalid_model_output",
+                "模型调用失败：模型结果不是有效 JSON",
+            ) from error
+        value = objects[0]
     if not isinstance(value, dict):
         raise LLMCallError("invalid_model_output", "模型调用失败：模型结果格式错误")
     return value
+
+
+def _required_text(data: dict[str, Any], field_name: str) -> str:
+    value = data.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise LLMCallError("invalid_model_output", "模型调用失败：模型结果缺少必需字段")
+    return value.strip()
+
+
+def _validate_plan_final(data: dict[str, Any]) -> dict[str, Any]:
+    data["explanation"] = _required_text(data, "explanation")
+    return data
+
+
+def _validate_check_final(data: dict[str, Any], *, answer: str | None) -> dict[str, Any]:
+    data["feedback"] = _required_text(data, "feedback")
+    missing = data.get("missing_dimensions")
+    if not isinstance(missing, list) or not all(isinstance(item, str) for item in missing):
+        raise LLMCallError("invalid_model_output", "模型调用失败：反馈字段格式错误")
+    assessed_level = data.get("assessed_level")
+    if answer and assessed_level not in {"recall", "relate", "transfer"}:
+        raise LLMCallError("invalid_model_output", "模型调用失败：理解层级评估结果无效")
+    if assessed_level is not None and assessed_level not in {"recall", "relate", "transfer"}:
+        raise LLMCallError("invalid_model_output", "模型调用失败：理解层级评估结果无效")
+    return data
+
+
+def _validate_recovery_final(data: dict[str, Any]) -> dict[str, Any]:
+    data["reason"] = _required_text(data, "reason")
+    return data
 
 
 def _knowledge_prerequisite_reminder(
@@ -106,6 +194,7 @@ class ModelTrace:
     output_tokens: int = 0
     latency_ms: int = 0
     retry_count: int = 0
+    format_repair_count: int = 0
     tool_calls: list[dict[str, Any]] = None
 
     def __post_init__(self) -> None:
@@ -132,9 +221,15 @@ class AgentService:
         def matches(memory) -> bool:
             if filters.task_type is not None and memory.task_type not in (None, filters.task_type):
                 return False
-            if filters.knowledge_point is not None and memory.knowledge_point not in (None, filters.knowledge_point):
+            if filters.knowledge_point is None:
+                if memory.knowledge_point is not None:
+                    return False
+            elif memory.knowledge_point not in (None, filters.knowledge_point):
                 return False
-            if filters.block_type is not None and memory.block_type not in (None, filters.block_type):
+            if filters.block_type is None:
+                if memory.block_type is not None:
+                    return False
+            elif memory.block_type not in (None, filters.block_type):
                 return False
             return memory.is_usable
 
@@ -153,6 +248,7 @@ class AgentService:
         user_payload: dict[str, Any],
         tool_names: tuple[str, ...],
         bind_arguments,
+        validate_final: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]], ModelTrace]:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -177,7 +273,47 @@ class AgentService:
                 trace.retry_count += result.retry_count
 
                 if not result.tool_calls:
-                    return _json_object(result.text), outputs, trace
+                    try:
+                        return validate_final(_json_object(result.text)), outputs, trace
+                    except LLMCallError as validation_error:
+                        trace.format_repair_count = 1
+                        repair_messages = [
+                            *messages,
+                            {"role": "assistant", "content": result.text or ""},
+                            {
+                                "role": "user",
+                                "content": (
+                                    "上一条最终回答格式无效。只修复格式，不改变语义；"
+                                    "现在仅返回一个满足系统字段要求的 JSON 对象，不要代码围栏或说明文字。"
+                                ),
+                            },
+                        ]
+                        try:
+                            repaired = self.llm.chat(
+                                repair_messages,
+                                response_format={"type": "json_object"},
+                            )
+                        except LLMCallError as repair_error:
+                            if repair_error.code != "provider_rejected":
+                                repair_error.format_repair_count = 1
+                                raise
+                            trace.input_tokens += repair_error.input_tokens
+                            trace.output_tokens += repair_error.output_tokens
+                            trace.latency_ms += repair_error.model_latency_ms
+                            trace.retry_count += repair_error.retry_count
+                            if repair_error.model:
+                                trace.model = repair_error.model
+                            repaired = self.llm.chat(repair_messages)
+                        trace.model = repaired.model or self.llm.model
+                        trace.input_tokens += repaired.input_tokens
+                        trace.output_tokens += repaired.output_tokens
+                        trace.latency_ms += repaired.latency_ms
+                        trace.retry_count += repaired.retry_count
+                        try:
+                            return validate_final(_json_object(repaired.text)), outputs, trace
+                        except LLMCallError as repaired_error:
+                            repaired_error.format_repair_count = 1
+                            raise repaired_error from validation_error
 
                 messages.append({
                     "role": "assistant",
@@ -217,10 +353,10 @@ class AgentService:
 
     def _record_success(
         self, operation: str, user_id: str, retrieval_ms: int, result, trace: ModelTrace,
-        *, user_acceptance: bool | None = None,
+        *, user_acceptance: bool | None = None, commit: bool = True,
     ) -> dict[str, int]:
         for memory in result.used:
-            self.repository.touch(memory.id)
+            self.repository.touch(memory.id, commit=False)
         memory_tokens = estimate_tokens(*(memory.content for memory in result.used))
         run = record_agent_run(
             self.session,
@@ -233,12 +369,17 @@ class AgentService:
             model_latency_ms=trace.latency_ms,
             retrieved_memory_ids=result.retrieved_memory_ids,
             used_memory_ids=result.used_memory_ids,
+            candidate_memory_ids=result.candidate_memory_ids,
             model=trace.model,
             status="success",
             tool_calls=trace.tool_calls,
             retry_count=trace.retry_count,
+            format_repair_count=trace.format_repair_count,
             user_acceptance=user_acceptance,
+            commit=False,
         )
+        if commit:
+            self.session.commit()
         return {
             "input_tokens": run.input_tokens,
             "memory_tokens": run.memory_tokens,
@@ -280,6 +421,7 @@ class AgentService:
             model_latency_ms=model_latency_ms,
             retrieved_memory_ids=result.retrieved_memory_ids if result else [],
             used_memory_ids=result.used_memory_ids if result else [],
+            candidate_memory_ids=result.candidate_memory_ids if result else [],
             model=(
                 trace.model if trace and trace.model
                 else getattr(error, "model", None)
@@ -288,6 +430,10 @@ class AgentService:
             tool_calls=trace.tool_calls if trace else [],
             status="failed",
             retry_count=trace_retry_count + error.retry_count,
+            format_repair_count=max(
+                trace.format_repair_count if trace else 0,
+                error.format_repair_count,
+            ),
             error_code=error.code,
             error_message=error.message,
         )
@@ -366,6 +512,7 @@ class AgentService:
             },
             tool_names=PLAN_TOOL_NAMES,
             bind_arguments=bind,
+            validate_final=_validate_plan_final,
         )
         tasks = [output for name, output in outputs if name in {"split_learning_task", "adjust_learning_plan"}]
         if not tasks:
@@ -378,11 +525,31 @@ class AgentService:
                 knowledge_point=knowledge_point, duration_minutes=task["duration_minutes"],
                 status="planned", created_at=datetime.now(timezone.utc),
             ))
-            self.session.commit()
-        metrics = self._record_success(operation, user_id, retrieval_ms, memories, trace)
-        explanation = str(final.get("explanation") or "模型已根据工具结果生成学习计划。")
-        if preferred is not None and f"{preferred}分钟" not in explanation:
-            explanation = f"{explanation} 根据你已确认的任务时长偏好，本次按{preferred}分钟拆分。"
+        try:
+            metrics = self._record_success(
+                operation, user_id, retrieval_ms, memories, trace,
+                commit=not persist_task,
+            )
+            if persist_task:
+                self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
+        explanation = final["explanation"]
+        if preferred is not None:
+            actual_minutes = task["duration_minutes"]
+            if actual_minutes != preferred:
+                explanation = re.sub(
+                    rf"(?:本次)?按\s*{preferred}\s*分钟(?:拆分|安排)?[。.]?",
+                    "",
+                    explanation,
+                ).strip()
+                explanation = (
+                    f"{explanation} 你通常偏好{preferred}分钟，但本次只有{available_minutes}分钟可用，"
+                    f"因此安排为{actual_minutes}分钟。"
+                ).strip()
+            elif f"{preferred}分钟" not in explanation:
+                explanation = f"{explanation} 根据你已确认的任务时长偏好，本次按{actual_minutes}分钟拆分。"
         if prerequisite_reminder and prerequisite_reminder not in explanation:
             explanation = f"{explanation} {prerequisite_reminder}"
         return {
@@ -395,20 +562,27 @@ class AgentService:
     def check(
         self, *, user_id: str, course: str, knowledge_point: str,
         level: str, material: str = "", answer: str | None = None,
+        task_type: str = "study",
     ) -> dict[str, Any]:
         retrieval_started = perf_counter()
         memories = self._retrieve(MemoryFilter(
-            user_id=user_id, course=course, knowledge_point=knowledge_point,
+            user_id=user_id, course=course, task_type=task_type,
+            knowledge_point=knowledge_point,
             memory_type=MemoryType.EXPLANATION_PREFERENCE,
         ))
         retrieval_ms = int((perf_counter() - retrieval_started) * 1000)
-        example_first = any("示例" in m.content or "例子" in m.content for m in memories.used)
+        preferred_explanation = next(
+            (
+                (memory, _explanation_style(memory.content))
+                for memory in memories.used
+                if _explanation_style(memory.content) is not None
+            ),
+            (None, None),
+        )
+        preferred_memory, explanation_style = preferred_explanation
         memories = select_used_memories(
             memories,
-            [
-                memory.id for memory in memories.used
-                if "示例" in memory.content or "例子" in memory.content
-            ],
+            [preferred_memory.id] if preferred_memory else [],
         )
         self._last_retrieval_ms = retrieval_ms
         self._last_memory_result = memories
@@ -417,7 +591,12 @@ class AgentService:
             if call.name == "get_learning_state":
                 return {"user_id": user_id, "course": course}
             if call.name == "generate_understanding_question":
-                return {"knowledge_point": knowledge_point, "level": level, "example_first": example_first}
+                return {
+                    "knowledge_point": knowledge_point,
+                    "level": level,
+                    "example_first": explanation_style == "example_first",
+                    "explanation_style": explanation_style,
+                }
             return call.arguments
 
         final, outputs, trace = self._run_model(
@@ -426,23 +605,20 @@ class AgentService:
             system_prompt=_prompt("socratic_check.txt"),
             user_payload={
                 "user_id": user_id, "course": course, "knowledge_point": knowledge_point,
-                "level": level, "material": material, "answer": answer,
+                "task_type": task_type, "level": level, "material": material, "answer": answer,
                 "confirmed_memories": [m.content for m in memories.used],
                 "instruction": "必须调用问题生成工具；最终仅返回JSON对象，字段为 feedback、missing_dimensions 和 assessed_level。提供 answer 时 assessed_level 必须为 recall、relate 或 transfer。",
             },
             tool_names=CHECK_TOOL_NAMES,
             bind_arguments=bind,
+            validate_final=lambda data: _validate_check_final(data, answer=answer),
         )
         questions = [output for name, output in outputs if name == "generate_understanding_question"]
         if not questions:
             raise LLMCallError("missing_required_tool", "模型调用失败：模型未生成理解检验问题")
         question = questions[-1]
-        missing = final.get("missing_dimensions") or []
-        if not isinstance(missing, list):
-            raise LLMCallError("invalid_model_output", "模型调用失败：反馈字段格式错误")
+        missing = final["missing_dimensions"]
         assessed_level = final.get("assessed_level")
-        if answer and assessed_level not in {"recall", "relate", "transfer"}:
-            raise LLMCallError("invalid_model_output", "模型调用失败：理解层级评估结果无效")
         if answer:
             state = self.session.scalar(select(KnowledgeStateRecord).where(
                 KnowledgeStateRecord.user_id == user_id,
@@ -460,11 +636,19 @@ class AgentService:
                 state.understanding_level = assessed_level
                 state.evidence = answer
                 state.updated_at = datetime.now(timezone.utc)
-            self.session.commit()
-        metrics = self._record_success("check", user_id, retrieval_ms, memories, trace)
+        try:
+            metrics = self._record_success(
+                "check", user_id, retrieval_ms, memories, trace,
+                commit=not bool(answer),
+            )
+            if answer:
+                self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
         return {
             **question,
-            "feedback": str(final.get("feedback") or "模型已生成形成性理解反馈。"),
+            "feedback": final["feedback"],
             "missing_dimensions": [str(item) for item in missing],
             "assessed_level": assessed_level,
             **_memory_payload(memories),
@@ -515,18 +699,44 @@ class AgentService:
             },
             tool_names=RECOVERY_TOOL_NAMES,
             bind_arguments=bind,
+            validate_final=_validate_recovery_final,
         )
         actions = [output for name, output in outputs if name == "generate_recovery_action"]
         if not actions:
             raise LLMCallError("missing_required_tool", "模型调用失败：模型未生成恢复动作")
         action = actions[-1]
-        metrics = self._record_success(
-            "recover", user_id, retrieval_ms, memories, trace,
-            user_acceptance=user_acceptance,
-        )
+        try:
+            if user_acceptance is True:
+                save_feedback_memory(
+                    self.repository,
+                    user_id=user_id,
+                    memory_type=MemoryType.RECOVERY_EXPERIENCE,
+                    course=course,
+                    task_type=task_type,
+                    knowledge_point=knowledge_point,
+                    block_type=block_type,
+                    content=action["action"],
+                    explicit=True,
+                    source_feedback=context or None,
+                    confidence=1.0,
+                    commit=False,
+                )
+                metrics = self._record_success(
+                    "recover", user_id, retrieval_ms, memories, trace,
+                    user_acceptance=user_acceptance, commit=False,
+                )
+                self.session.commit()
+            else:
+                metrics = self._record_success(
+                    "recover", user_id, retrieval_ms, memories, trace,
+                    user_acceptance=user_acceptance,
+                )
+        except Exception:
+            self.session.rollback()
+            raise
         return {
             "action": action["action"],
-            "reason": str(final.get("reason") or action["reason"]),
+            "reason": final["reason"],
             **_memory_payload(memories),
             "metrics": metrics,
         }

@@ -1,3 +1,7 @@
+<script setup lang="ts">
+import AppShell from './components/AppShell.vue'
+</script>
+
 <template>
-  <main><h1>StudyFlow Memory</h1><p>反馈记忆驱动的学习恢复 Agent</p></main>
+  <AppShell />
 </template>

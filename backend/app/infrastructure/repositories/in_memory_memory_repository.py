@@ -30,7 +30,7 @@ class InMemoryMemoryRepository(MemoryRepository):
     def __init__(self) -> None:
         self._store: dict[str, Memory] = {}
 
-    def add(self, memory: Memory) -> Memory:
+    def add(self, memory: Memory, *, commit: bool = True) -> Memory:
         self._store[memory.id] = memory
         return memory
 
@@ -66,7 +66,7 @@ class InMemoryMemoryRepository(MemoryRepository):
     def delete(self, memory_id: str) -> bool:
         return self._store.pop(memory_id, None) is not None
 
-    def touch(self, memory_id: str) -> bool:
+    def touch(self, memory_id: str, *, commit: bool = True) -> bool:
         memory = self._store.get(memory_id)
         if memory is None:
             return False

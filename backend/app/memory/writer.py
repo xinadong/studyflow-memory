@@ -4,8 +4,10 @@ from app.domain.entities.memory import Memory
 from app.domain.repositories.memory_repository import MemoryRepository
 
 
-def save_memory(repository: MemoryRepository, memory: Memory) -> Memory:
-    return repository.add(memory)
+def save_memory(repository: MemoryRepository, memory: Memory, *, commit: bool = True) -> Memory:
+    if commit:
+        return repository.add(memory)
+    return repository.add(memory, commit=False)
 
 
 def record_use(memory: Memory) -> Memory:
@@ -29,6 +31,7 @@ def save_feedback_memory(
     block_type=None,
     source_feedback: str | None = None,
     confidence: float = 0.5,
+    commit: bool = True,
 ) -> Memory:
     from app.memory.policy import build_memory_from_feedback
 
@@ -44,4 +47,4 @@ def save_feedback_memory(
         confidence=confidence,
     )
     memory.block_type = block_type
-    return save_memory(repository, memory)
+    return save_memory(repository, memory, commit=commit)

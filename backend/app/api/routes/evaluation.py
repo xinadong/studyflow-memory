@@ -21,6 +21,8 @@ def compare(payload: EvaluationCompareRequest, service: AgentService = Depends(g
         without_memory = service.plan(
             user_id=payload.user_id, course=payload.course, goal=payload.goal,
             available_minutes=payload.available_minutes,
+            task_type=payload.task_type,
+            knowledge_point=payload.knowledge_point,
             use_memory=False,
             persist_task=False,
             operation="evaluation_without_memory",

@@ -1,5 +1,7 @@
 """Agent 计划、理解检验和恢复 API 模型。"""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.domain.value_objects.memory_type import BlockType
@@ -36,8 +38,9 @@ class UnderstandingCheckRequest(BaseModel):
     user_id: str
     course: str
     knowledge_point: str
+    task_type: str = "study"
     material: str = ""
-    level: str = "recall"
+    level: Literal["recall", "relate", "transfer"] = "recall"
     answer: str | None = None
 
 

@@ -1,1 +1,7 @@
-<template><article>UnderstandingQuestion</article></template>
+<script setup lang="ts">
+import type { UnderstandingCheckResponse } from '../types'
+defineProps<{ result: UnderstandingCheckResponse; answer: string; busy?: boolean }>()
+defineEmits<{ 'update:answer':[value:string]; submit:[] }>()
+</script>
+<template><section class="question-card card panel"><div class="row between"><span class="chip">{{ result.level }}</span><span v-if="result.assessed_level" class="chip success">评估：{{ result.assessed_level }}</span></div><h2>{{ result.question }}</h2><p v-if="result.feedback" class="feedback">{{ result.feedback }}</p><div v-if="result.missing_dimensions.length" class="missing"><strong>还可以补充</strong><span v-for="item in result.missing_dimensions" :key="item">{{ item }}</span></div><div class="field"><label for="answer">你的回答</label><textarea id="answer" :value="answer" rows="6" placeholder="用自己的话复述，并尝试举一个例子…" @input="$emit('update:answer',($event.target as HTMLTextAreaElement).value)" /></div><button class="btn btn-primary" :disabled="busy || !answer.trim()" @click="$emit('submit')">{{ busy ? '正在评估…' : '提交回答' }}</button></section></template>
+<style scoped>.question-card{display:grid;gap:18px}.question-card h2{margin:0;font-size:21px;line-height:1.5}.feedback{padding:15px;border-radius:15px;background:#e9fbf5;color:#167b5d;line-height:1.7}.missing{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.missing span{font-size:12px;padding:6px 9px;background:#fff4ea;color:var(--orange);border-radius:999px}</style>

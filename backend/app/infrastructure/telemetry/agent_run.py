@@ -20,13 +20,16 @@ def record_agent_run(
     model_latency_ms: int = 0,
     retrieved_memory_ids: list[str] | None = None,
     used_memory_ids: list[str] | None = None,
+    candidate_memory_ids: list[str] | None = None,
     model: str | None = None,
     status: str = "success",
     tool_calls: list[dict] | None = None,
     retry_count: int = 0,
+    format_repair_count: int = 0,
     error_code: str | None = None,
     error_message: str | None = None,
     user_acceptance: bool | None = None,
+    commit: bool = True,
 ) -> AgentRunRecord:
     run = AgentRunRecord(
         id=uuid4().hex,
@@ -39,16 +42,20 @@ def record_agent_run(
         model_latency_ms=model_latency_ms,
         retrieved_memory_ids=retrieved_memory_ids or [],
         used_memory_ids=used_memory_ids or [],
+        candidate_memory_ids=candidate_memory_ids or [],
         model=model,
         status=status,
         tool_calls=tool_calls or [],
         retry_count=retry_count,
+        format_repair_count=format_repair_count,
         error_code=error_code,
         error_message=error_message,
         user_acceptance=user_acceptance,
         created_at=datetime.now(timezone.utc),
     )
     session.add(run)
-    session.commit()
+    session.flush()
+    if commit:
+        session.commit()
     session.refresh(run)
     return run

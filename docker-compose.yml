@@ -1,8 +1,12 @@
+name: studyflow-memory
+
 services:
   backend:
     build:
       context: .
       dockerfile: infra/Dockerfile.backend
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
     env_file: .env
     environment:
       DATABASE_URL: sqlite:////app/data/studyflow.db

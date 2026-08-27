@@ -8,6 +8,8 @@ class EvaluationCompareRequest(BaseModel):
     course: str = "数据结构与算法"
     goal: str = "学习图的 BFS"
     available_minutes: int = Field(default=25, ge=1, le=240)
+    task_type: str = "study"
+    knowledge_point: str | None = None
 
 
 class EvaluationCompareResponse(BaseModel):

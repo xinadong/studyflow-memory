@@ -36,9 +36,9 @@ async def handle_llm_error(_, exc: LLMCallError) -> JSONResponse:
         status_code=exc.status_code,
         content={
             "detail": {
-                "code": exc.code,
-                "message": exc.message,
-                "retry_count": exc.retry_count,
+                    "code": exc.code,
+                    "message": exc.message,
+                    "retry_count": exc.retry_count + exc.format_repair_count,
             }
         },
     )

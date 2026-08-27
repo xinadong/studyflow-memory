@@ -20,6 +20,14 @@ def _out(memory: Memory) -> MemoryOut:
 
 @router.post("/memories", response_model=MemoryOut, status_code=status.HTTP_201_CREATED)
 def create_memory(payload: MemoryCreate, repo: SqlAlchemyMemoryRepository = Depends(get_memory_repository)):
+    if payload.memory_type == MemoryType.KNOWLEDGE_STATE:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "unsupported_memory_type",
+                "message": "知识状态必须通过理解检验提交",
+            },
+        )
     memory = Memory(**payload.model_dump())
     return _out(repo.add(memory))
 

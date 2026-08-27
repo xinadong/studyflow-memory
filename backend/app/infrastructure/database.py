@@ -53,8 +53,11 @@ def _upgrade_agent_runs_schema(connection) -> None:
         "status": "VARCHAR(32) NOT NULL DEFAULT 'success'",
         "tool_calls": "JSON NOT NULL DEFAULT '[]'",
         "retry_count": "INTEGER NOT NULL DEFAULT 0",
+        "format_repair_count": "INTEGER NOT NULL DEFAULT 0",
         "error_code": "VARCHAR(64)",
         "error_message": "TEXT",
+        "user_acceptance": "BOOLEAN",
+        "candidate_memory_ids": "JSON NOT NULL DEFAULT '[]'",
     }
     for name, definition in additions.items():
         if name not in existing:

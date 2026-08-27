@@ -39,7 +39,7 @@ class MemoryUpdate:
 
 class MemoryRepository(ABC):
     @abstractmethod
-    def add(self, memory: Memory) -> Memory:
+    def add(self, memory: Memory, *, commit: bool = True) -> Memory:
         raise NotImplementedError
 
     @abstractmethod
@@ -58,7 +58,7 @@ class MemoryRepository(ABC):
     def delete(self, memory_id: str) -> bool:
         raise NotImplementedError
 
-    def touch(self, memory_id: str) -> bool:
+    def touch(self, memory_id: str, *, commit: bool = True) -> bool:
         """Record that a memory was used; implementations may override it."""
         return False
 

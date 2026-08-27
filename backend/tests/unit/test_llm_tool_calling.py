@@ -1,10 +1,14 @@
+import json
 import unittest
 
 import httpx
 
+from app.agents.orchestrator import _explanation_style, _json_object
+from app.api.routes.feedback import _correct_memory_type_from_explicit_cue
+from app.domain.value_objects.memory_type import MemoryType
+from app.agents.tool_registry import RECOVERY_TOOL_NAMES, tool_definitions
 from app.infrastructure.llm.adapter import LLMCallError
 from app.infrastructure.llm.client import OpenAICompatibleClient
-from app.agents.orchestrator import _json_object
 
 
 PLAN_TOOL = {
@@ -23,11 +27,64 @@ PLAN_TOOL = {
 
 
 class LLMToolCallingTests(unittest.TestCase):
+    def test_recovery_tool_schema_inlines_local_enum_references(self):
+        schema = tool_definitions(RECOVERY_TOOL_NAMES)[1]["function"]["parameters"]
+        encoded = json.dumps(schema, ensure_ascii=False)
+
+        self.assertNotIn("$ref", encoded)
+        self.assertNotIn("$defs", encoded)
+        self.assertIn('"too_hard"', encoded)
+
+    def test_explicit_diagram_preference_wins_over_concept_word(self):
+        self.assertEqual(
+            _explanation_style("以后请先给我看图示或流程图，再解释概念"),
+            "diagram_first",
+        )
+
+    def test_ambiguous_feedback_cues_do_not_force_one_memory_type(self):
+        self.assertEqual(
+            _correct_memory_type_from_explicit_cue(
+                "任务控制20分钟，同时先看一个例子",
+                MemoryType.TASK_PREFERENCE,
+            ),
+            MemoryType.TASK_PREFERENCE,
+        )
+
     def test_final_json_parser_accepts_a_fenced_json_object(self):
         self.assertEqual(
             _json_object("```json\n{\"explanation\":\"已生成任务\"}\n```"),
             {"explanation": "已生成任务"},
         )
+
+    def test_final_json_parser_extracts_one_embedded_object(self):
+        self.assertEqual(
+            _json_object('结果如下：\n{"explanation":"已生成任务"}\n请查收。'),
+            {"explanation": "已生成任务"},
+        )
+
+    def test_client_sends_response_format_when_requested(self):
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={
+                "choices": [{"message": {
+                    "role": "assistant",
+                    "content": '{"explanation":"ok"}',
+                }}],
+            })
+
+        client = OpenAICompatibleClient(
+            "https://example.test/v1", "secret", "gpt-5.6-terra",
+            transport=httpx.MockTransport(handler), max_retries=0,
+        )
+        client.chat(
+            [{"role": "user", "content": "返回JSON"}],
+            response_format={"type": "json_object"},
+        )
+
+        payload = __import__("json").loads(requests[0].content)
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
 
     def test_client_sends_tools_and_parses_tool_calls_and_usage(self):
         requests = []

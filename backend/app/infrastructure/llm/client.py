@@ -55,10 +55,13 @@ class OpenAICompatibleClient:
         *,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] = "auto",
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResult:
         payload: dict[str, Any] = {"model": self.model, "messages": messages}
         if tools:
             payload.update({"tools": tools, "tool_choice": tool_choice})
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         started = perf_counter()
         retry_count = 0

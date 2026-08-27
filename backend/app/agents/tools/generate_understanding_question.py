@@ -8,9 +8,20 @@ LEVEL_QUESTIONS = {
 }
 
 
-def generate_understanding_question(*, knowledge_point: str, level: str = "recall", example_first: bool = False) -> dict:
+def generate_understanding_question(
+    *, knowledge_point: str, level: str = "recall", example_first: bool = False,
+    explanation_style: str | None = None,
+) -> dict:
     normalized = level if level in LEVEL_QUESTIONS else "recall"
-    prefix = "先看一个简短例子，再回答：" if example_first else ""
+    style = explanation_style
+    if style not in {"example_first", "definition_first", "diagram_first"}:
+        style = "example_first" if example_first else None
+    prefixes = {
+        "example_first": "先看一个简短例子，再回答：",
+        "definition_first": "先给出核心定义，再回答：",
+        "diagram_first": "先画出一个简图或流程，再回答：",
+    }
+    prefix = prefixes.get(style, "")
     return {
         "level": normalized,
         "question": f"{prefix}{knowledge_point}：{LEVEL_QUESTIONS[normalized]}",

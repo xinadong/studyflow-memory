@@ -1,0 +1,4 @@
+﻿timestamp,student_id,preference,course,goal,knowledge_point,available_minutes,plan_used_count,plan_modified,plan_accepted,check_used_count,check_accepted,check_answer,check_assessed_level,recover_used_count,recover_continued,understanding,memory_preference,open_feedback,note
+2026-08-26T21:54:05,r-01,我一般一次专注学习30分钟,高等数学,复习一下极限的定义,极限,20,1,0,True,0,,就是函数值越来越接近一个数，但可能到不了,recall,0,False,4,4,计划挺合理，但它一直提我习惯30分钟，我这次就20分钟，有点啰嗦,
+2026-08-26T22:07:59,r-02,我喜欢先看个例子再讲原理，直接上定义我看不懂,数据结构,搞懂栈和队列的区别,栈和队列,30,0,1,,0,,栈像摞盘子，后进先出；队列像排队，先进先出。栈解决要回溯的场景，队列解决按先后顺序处理的场景,recall,0,True,,4,先给例子再讲，对我这种看不懂定义的人很友好，希望后面都这样,
+2026-08-26T22:18:06,r-03,背累了就起来走走，缓一下再继续,大学英语,背今天的四级单词,四级单词,30,0,0,,0,,单词就是英语词汇嘛，背它是为了阅读和考试能看懂、认识更多词,recall,1,True,4,3,它记得我累了要走一走，这个挺准的。但计划那步没用到我的习惯，我有点没看懂它根据什么排的时间,

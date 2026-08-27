@@ -27,6 +27,7 @@ class LLMCallError(RuntimeError):
         self.input_tokens = 0
         self.output_tokens = 0
         self.model_latency_ms = 0
+        self.format_repair_count = 0
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class LLMAdapter(Protocol):
         *,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] = "auto",
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResult: ...
 
 
@@ -76,6 +78,7 @@ class UnconfiguredLLMAdapter:
         *,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] = "auto",
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResult:
         raise LLMCallError(
             "model_not_configured",

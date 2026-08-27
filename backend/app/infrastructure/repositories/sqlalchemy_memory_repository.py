@@ -53,11 +53,13 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
     def __init__(self, session: Session):
         self.session = session
 
-    def add(self, memory: Memory) -> Memory:
+    def add(self, memory: Memory, *, commit: bool = True) -> Memory:
         record = MemoryRecord()
         _apply_entity(record, memory)
         self.session.add(record)
-        self.session.commit()
+        self.session.flush()
+        if commit:
+            self.session.commit()
         self.session.refresh(record)
         return _to_entity(record)
 
@@ -118,11 +120,12 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
         self.session.commit()
         return True
 
-    def touch(self, memory_id: str) -> bool:
+    def touch(self, memory_id: str, *, commit: bool = True) -> bool:
         record = self.session.get(MemoryRecord, memory_id)
         if record is None:
             return False
         record.use_count += 1
         record.last_used_at = datetime.now(timezone.utc)
-        self.session.commit()
+        if commit:
+            self.session.commit()
         return True

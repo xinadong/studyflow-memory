@@ -12,7 +12,7 @@ def split_learning_task(
     knowledge_point: str | None = None,
 ) -> dict:
     duration = min(available_minutes, preferred_minutes or 25)
-    duration = max(5, duration)
+    duration = max(1, duration)
     return {
         "id": uuid4().hex,
         "title": goal,
