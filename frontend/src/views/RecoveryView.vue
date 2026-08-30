@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import PageHeader from '../components/PageHeader.vue'
+import { onBeforeUnmount, ref } from 'vue'
 import LoadingState from '../components/LoadingState.vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import RecoveryAction from '../components/RecoveryAction.vue'
@@ -8,32 +7,206 @@ import { recoverLearning } from '../services/agent'
 import { errorMessage } from '../services/api'
 import { useSessionStore } from '../stores/session'
 import { usePlanStore } from '../stores/plan'
+import nebulaBackground from '../assets/thought-nebula-bg.png'
+import sendIcon from '../assets/thought-send.svg'
+import voiceIcon from '../assets/thought-voice.svg'
 import type { BlockType, RecoveryResponse } from '../types'
 
-const session=useSessionStore(), plans=usePlanStore()
-const block=ref<BlockType>((sessionStorage.getItem('studyflow-block') as BlockType) || 'time')
-const context=ref(session.selectedTask ? `当前任务：${session.selectedTask.title}` : '')
-const result=ref<RecoveryResponse|null>(null), busy=ref(false), error=ref(''), applied=ref(false)
-const released=ref<string[]>([])
-const options=[{value:'time',icon:'◷',label:'时间不足',desc:'剩余时间无法完成原计划'},{value:'too_hard',icon:'?',label:'内容太难',desc:'暂时找不到理解入口'},{value:'distraction',icon:'◎',label:'容易分心',desc:'注意力频繁离开任务'},{value:'fatigue',icon:'☾',label:'有些疲劳',desc:'当前精力不足以推进'}] as const
-function release(item: typeof options[number]){block.value=item.value;if(!released.value.includes(item.value))released.value.push(item.value);if(!context.value)context.value=`当前感受：${item.label}`}
-async function recover(acceptance?:boolean){busy.value=true;error.value='';try{result.value=await recoverLearning({user_id:session.userId,course:session.course,block_type:block.value,context:context.value,task_type:session.selectedTask?.task_type||'study',knowledge_point:session.selectedTask?.knowledge_point||session.knowledgePoint||undefined,...(acceptance===undefined?{}:{user_acceptance:acceptance})})}catch(e){error.value=errorMessage(e)}finally{busy.value=false}}
-function apply(){applied.value=true;plans.localAdjustment=result.value?.action||'';if(session.selectedTask)plans.statuses[session.selectedTask.id]='deferred';recover(true)}
-function reject(){applied.value=false;recover(false)}
+const session = useSessionStore()
+const plans = usePlanStore()
+const block = ref<BlockType>((sessionStorage.getItem('studyflow-block') as BlockType) || 'time')
+const context = ref(session.selectedTask ? `当前任务：${session.selectedTask.title}` : '')
+const result = ref<RecoveryResponse | null>(null)
+const busy = ref(false)
+const error = ref('')
+const applied = ref(false)
+const launched = ref(false)
+const launchSequence = ref(0)
+
+interface LaunchPreset {
+  path: string
+  starPoints: string
+  duration: number
+}
+
+const launchPreset = ref<LaunchPreset | null>(null)
+let launchResetTimer: number | undefined
+let previousStarSize = 0
+
+function randomBetween(min: number, max: number) {
+  return Math.random() * (max - min) + min
+}
+
+function createStarPoints(size: number) {
+  const points: string[] = []
+  const outerRadius = size / 2
+  const innerRadius = outerRadius * 0.45
+  for (let index = 0; index < 10; index += 1) {
+    const radius = index % 2 === 0 ? outerRadius : innerRadius
+    const angle = -Math.PI / 2 + index * Math.PI / 5
+    points.push(`${(Math.cos(angle) * radius).toFixed(1)},${(Math.sin(angle) * radius).toFixed(1)}`)
+  }
+  return points.join(' ')
+}
+
+function createLaunchPreset(): LaunchPreset {
+  let starSize = Math.round(randomBetween(38, 72))
+  if (Math.abs(starSize - previousStarSize) < 8) {
+    starSize = starSize > 55 ? Math.max(38, starSize - 13) : Math.min(72, starSize + 13)
+  }
+  previousStarSize = starSize
+
+  const startX = Math.round(randomBetween(820, 950))
+  const startY = Math.round(randomBetween(480, 545))
+  const endX = Math.round(randomBetween(105, 430))
+  const endY = Math.round(randomBetween(48, 165))
+  const controlOneX = Math.round(startX - randomBetween(130, 300))
+  const controlOneY = Math.round(startY - randomBetween(10, 120))
+  const controlTwoX = Math.round(endX + randomBetween(90, 330))
+  const controlTwoY = Math.round(endY + randomBetween(35, 240))
+
+  return {
+    path: `M ${startX} ${startY} C ${controlOneX} ${controlOneY} ${controlTwoX} ${controlTwoY} ${endX} ${endY}`,
+    starPoints: createStarPoints(starSize),
+    duration: Number(randomBetween(1.15, 1.7).toFixed(2)),
+  }
+}
+
+function startLaunch() {
+  if (launchResetTimer !== undefined) window.clearTimeout(launchResetTimer)
+  launchSequence.value += 1
+  launchPreset.value = createLaunchPreset()
+  launched.value = true
+  launchResetTimer = window.setTimeout(() => {
+    launched.value = false
+    launchPreset.value = null
+    context.value = ''
+  }, (launchPreset.value.duration + 0.55) * 1000)
+}
+
+async function recover(acceptance?: boolean) {
+  const submittedContext = context.value
+  if (acceptance === undefined) {
+    startLaunch()
+  }
+  busy.value = true
+  error.value = ''
+  try {
+    result.value = await recoverLearning({
+      user_id: session.userId,
+      course: session.course,
+      block_type: block.value,
+      context: submittedContext,
+      task_type: session.selectedTask?.task_type || 'study',
+      knowledge_point: session.selectedTask?.knowledge_point || session.knowledgePoint || undefined,
+      ...(acceptance === undefined ? {} : { user_acceptance: acceptance }),
+    })
+  } catch (e) {
+    error.value = errorMessage(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+function apply() {
+  applied.value = true
+  plans.localAdjustment = result.value?.action || ''
+  if (session.selectedTask) plans.statuses[session.selectedTask.id] = 'deferred'
+  recover(true)
+}
+
+function reject() {
+  applied.value = false
+  recover(false)
+}
+
+onBeforeUnmount(() => {
+  if (launchResetTimer !== undefined) window.clearTimeout(launchResetTimer)
+})
 </script>
-<template><section><PageHeader eyebrow="THOUGHT NEBULA · RECOVERY" title="思绪星云与学习恢复" subtitle="主动释放当前阻塞，Flow Agent 再把它转成一个低压力恢复动作" />
-  <div class="nebula card">
-    <div class="nebula-copy"><span class="chip">仅学习状态支持</span><h2>此刻，什么正在挡住你？</h2><p>点击一颗星释放想法。它只作为你主动提供的学习信号，不进行情绪诊断。</p></div>
-    <button v-for="(item,index) in options" :key="item.value" :class="[`star-${index}`,{active:block===item.value,released:released.includes(item.value)}]" @click="release(item)"><b>{{ item.icon }}</b><strong>{{ item.label }}</strong><small>{{ released.includes(item.value)?'已释放':item.desc }}</small></button>
-    <div class="nebula-center">✦<small>{{ released.length ? `已释放 ${released.length} 个信号` : '点击星点' }}</small></div>
-  </div>
-  <div class="card panel context-form"><div><p class="eyebrow">主动反馈信号 · {{ options.find(item=>item.value===block)?.label }}</p><h2>把具体情况交给 Flow Agent</h2></div><div class="field"><label for="context">补充当前情况</label><textarea id="context" v-model="context" rows="3" placeholder="例如：今晚只剩 20 分钟，但这部分概念还没看懂。" /></div><button class="btn btn-primary" :disabled="busy" @click="recover()">生成一个低压力恢复动作 →</button></div>
-  <LoadingState v-if="busy" text="正在结合阻塞类型与过往恢复经验…"/><ErrorNotice v-if="error" :message="error" @retry="recover()"/>
-  <RecoveryAction v-if="result" :result="result" @accept="apply" @reject="reject"/>
-  <div v-if="applied" class="notice success">方案已应用到当前浏览器会话；后端暂无任务状态更新接口，因此不会写入长期计划。</div>
-  <div v-if="result" class="impact card panel"><div><p class="eyebrow">调整影响 · 会话演示</p><h2>应用后，计划会发生这些变化</h2></div><div class="grid-3"><div class="metric"><span>当前任务</span><strong>{{ session.selectedTask?.duration_minutes || 25 }} 分钟</strong><small class="muted">保留核心目标</small></div><div class="metric"><span>本次动作</span><strong>1 项</strong><small class="muted">来自真实恢复建议</small></div><div class="metric"><span>长期数据</span><strong>不写入</strong><small class="muted">仅本次浏览器会话</small></div></div></div>
-</section></template>
+
+<template>
+  <section class="thought-page" :style="{ '--nebula-background': `url(${nebulaBackground})` }">
+    <div class="cosmic-veil" aria-hidden="true" />
+    <header class="thought-intro">
+      <p class="thought-eyebrow">THOUGHT NEBULA · PRIVATE SPACE</p>
+      <h1>让此刻的思绪，成为一束光</h1>
+      <p>把压力、分心或疲惫轻轻放进星空。<br>每一次表达，都在为混乱找到位置。</p>
+    </header>
+    <div class="privacy-status">◉ 仅自己可见</div>
+
+    <div v-if="launched && launchPreset" :key="launchSequence" class="launch-scene" aria-live="polite">
+      <svg
+        class="launch-svg"
+        viewBox="0 0 1000 560"
+        preserveAspectRatio="none"
+        :style="{
+          '--launch-duration': `${launchPreset.duration}s`,
+          '--trail-fade-delay': `${launchPreset.duration}s`,
+        }"
+        aria-hidden="true"
+      >
+        <defs>
+          <filter id="star-glow" x="-180%" y="-180%" width="460%" height="460%">
+            <feGaussianBlur stdDeviation="8" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+          <linearGradient id="trail-gradient" x1="1" y1="1" x2="0" y2="0">
+            <stop offset="0" stop-color="#88a5e0" stop-opacity="0" />
+            <stop offset="0.34" stop-color="#c8ddf5" stop-opacity="0.72" />
+            <stop offset="1" stop-color="#ffffff" stop-opacity="0.98" />
+          </linearGradient>
+        </defs>
+        <path class="trail-glow" :d="launchPreset.path" pathLength="1" />
+        <path class="trail-core" :d="launchPreset.path" pathLength="1" />
+        <g class="moving-star" filter="url(#star-glow)">
+          <polygon :points="launchPreset.starPoints" fill="#ffffff" />
+          <animateMotion
+            :dur="`${launchPreset.duration}s`"
+            :path="launchPreset.path"
+            fill="freeze"
+            calcMode="spline"
+            keyTimes="0;1"
+            keySplines=".2 .65 .28 1"
+          />
+        </g>
+      </svg>
+      <span class="sr-only">心情已化为星星，正在划过星空</span>
+    </div>
+
+    <form class="launch-composer" @submit.prevent="recover()">
+      <div><h2>{{ launched ? '已发射至星空' : '发射此刻心情' }}</h2><p>文字或语音，都会成为一颗星</p></div>
+      <div class="thought-input">
+        <label class="sr-only" for="thought-context">输入此刻的思绪</label>
+        <input id="thought-context" v-model.trim="context" type="text" placeholder="输入此刻的思绪…" :disabled="busy">
+        <button class="launch-button" type="submit" :disabled="busy" aria-label="发射此刻心情"><img :src="sendIcon" alt=""></button>
+        <span class="input-divider" aria-hidden="true" />
+        <button class="voice-button" type="button" disabled title="语音输入暂未接入" aria-label="语音输入暂未接入"><img :src="voiceIcon" alt=""></button>
+      </div>
+      <small>◉ 默认仅自己可见</small>
+    </form>
+  </section>
+
+  <section v-if="busy || error || result || applied" class="recovery-output stack">
+    <LoadingState v-if="busy" text="正在结合阻塞类型与过往恢复经验…" />
+    <ErrorNotice v-if="error" :message="error" @retry="recover()" />
+    <RecoveryAction v-if="result" :result="result" @accept="apply" @reject="reject" />
+    <div v-if="applied" class="notice success">方案已应用到当前浏览器会话；后端暂无任务状态更新接口，因此不会写入长期计划。</div>
+    <div v-if="result" class="impact card panel">
+      <div><p class="eyebrow">调整影响 · 会话演示</p><h2>应用后，计划会发生这些变化</h2></div>
+      <div class="grid-3">
+        <div class="metric"><span>当前任务</span><strong>{{ session.selectedTask?.duration_minutes || 25 }} 分钟</strong><small class="muted">保留核心目标</small></div>
+        <div class="metric"><span>本次动作</span><strong>1 项</strong><small class="muted">来自真实恢复建议</small></div>
+        <div class="metric"><span>长期数据</span><strong>不写入</strong><small class="muted">仅本次浏览器会话</small></div>
+      </div>
+    </div>
+  </section>
+</template>
+
 <style scoped>
-.nebula{position:relative;min-height:470px;overflow:hidden;margin-bottom:18px;background:radial-gradient(circle at 50% 48%,#393d88 0,#1b275c 42%,#0d173d 78%);border-color:#344077}.nebula:before,.nebula:after{content:"";position:absolute;inset:0;background-image:radial-gradient(#fff 1px,transparent 1px);background-size:34px 34px;opacity:.28}.nebula:after{background-size:71px 71px;transform:translate(13px,19px);opacity:.18}.nebula-copy{position:absolute;z-index:2;left:28px;top:26px;width:310px;color:white}.nebula-copy h2{margin:14px 0 7px}.nebula-copy p{font-size:12px;line-height:1.6;color:#cdd5ff}.nebula button{position:absolute;z-index:3;width:132px;min-height:78px;border:1px solid rgba(255,255,255,.28);border-radius:22px;padding:12px;background:rgba(255,255,255,.1);backdrop-filter:blur(10px);color:white;display:grid;gap:3px;text-align:left}.nebula button b{font-size:19px;color:#71e8f2}.nebula button small{font-size:9px;color:#cdd5ff;line-height:1.4}.nebula button.active{border-color:#72e9f4;background:linear-gradient(135deg,rgba(40,199,223,.55),rgba(118,87,246,.55));box-shadow:0 0 30px rgba(84,221,233,.35)}.nebula button.released{animation:release .55s ease}.star-0{left:8%;top:38%}.star-1{right:8%;top:31%}.star-2{left:15%;bottom:8%}.star-3{right:14%;bottom:10%}.nebula-center{position:absolute;z-index:2;left:50%;top:58%;transform:translate(-50%,-50%);width:92px;height:92px;border-radius:50%;display:grid;place-content:center;text-align:center;color:white;font-size:28px;background:radial-gradient(circle at 35% 25%,white,#45d5e4 22%,#7657f6 64%,#30206f);box-shadow:0 0 50px rgba(84,221,233,.45)}.nebula-center small{display:block;font-size:8px;margin-top:3px}.context-form{display:grid;gap:15px;margin-bottom:18px}.context-form h2{margin:4px 0}.impact{margin-top:18px}.impact h2{margin:4px 0 18px}@keyframes release{50%{transform:scale(1.07);filter:brightness(1.25)}}
-@media(max-width:760px){.nebula{min-height:560px}.nebula-copy{width:auto;right:22px}.nebula button{width:120px}.star-0{left:7%;top:35%}.star-1{right:7%;top:35%}.star-2{left:7%;bottom:10%}.star-3{right:7%;bottom:10%}.nebula-center{top:60%}}
+.thought-page{position:relative;min-height:100vh;margin:-40px 0 -70px -36px;overflow:hidden;color:white;background:#0b1838 var(--nebula-background) center/cover no-repeat;isolation:isolate}.cosmic-veil{position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,rgba(11,24,56,.74),rgba(58,96,160,.04) 42%,rgba(11,24,56,.54)),linear-gradient(180deg,transparent 58%,rgba(11,24,56,.9))}.thought-intro{position:absolute;top:58px;left:46px}.thought-eyebrow{margin-bottom:18px;color:#c8ddf5;font-size:11px;font-weight:800;letter-spacing:.06em}.thought-intro h1{margin:0 0 12px;font-size:clamp(29px,3vw,38px);line-height:1.2}.thought-intro>p:last-child{color:#c8ddf5;font-size:14px;line-height:1.75}.privacy-status{position:absolute;top:66px;right:40px;padding:11px 27px;border:1px solid rgba(200,221,245,.26);border-radius:999px;background:rgba(11,24,56,.38);color:#c8ddf5;font-size:11px;backdrop-filter:blur(18px)}
+.launch-composer{position:absolute;right:40px;bottom:66px;left:46px;display:grid;gap:10px;padding:22px 28px 20px;border:1.25px solid rgba(200,221,245,.62);border-radius:30px;background:rgba(200,221,245,.16);box-shadow:0 20px 44px rgba(11,24,56,.42);backdrop-filter:blur(28px)}.launch-composer h2{margin:0;font-size:24px}.launch-composer p{margin:4px 0 0;color:#c8ddf5;font-size:11px}.launch-composer>small{color:#c8ddf5;font-size:10px}.thought-input{display:grid;grid-template-columns:minmax(0,1fr) 44px 1px 44px;align-items:center;min-height:58px;overflow:hidden;border:1px solid rgba(255,255,255,.7);border-radius:19px;background:rgba(200,221,245,.72);box-shadow:inset 2px 3px 6px rgba(58,96,160,.24)}.thought-input input{width:100%;height:56px;padding:0 18px;border:0;outline:0;color:#0b1838;background:transparent}.thought-input input::placeholder{color:rgba(11,24,56,.72)}.thought-input button{width:44px;height:44px;padding:12px;border:0;background:transparent}.thought-input button:not(:disabled):hover{filter:brightness(1.18);transform:scale(1.06)}.thought-input button img{display:block;width:20px;height:20px}.voice-button:disabled{cursor:default;opacity:.75}.input-divider{width:1px;height:28px;background:rgba(58,96,160,.44)}
+.launch-scene{position:absolute;inset:126px 34px 255px 40px;pointer-events:none}.launch-svg{width:100%;height:100%;overflow:visible}.trail-core,.trail-glow{fill:none;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;animation:draw-trail var(--launch-duration) cubic-bezier(.2,.65,.28,1) forwards,fade-trail .45s var(--trail-fade-delay) ease-out forwards}.trail-core{stroke:url(#trail-gradient);stroke-width:2.2;vector-effect:non-scaling-stroke}.trail-glow{stroke:#88a5e0;stroke-width:9;opacity:.5;filter:blur(7px);vector-effect:non-scaling-stroke}.moving-star{animation:star-arrive var(--launch-duration) cubic-bezier(.2,.65,.28,1) both,fade-star .45s var(--trail-fade-delay) ease-out forwards}.recovery-output{margin:96px 0 40px}.impact h2{margin:4px 0 18px}
+@keyframes draw-trail{0%{stroke-dashoffset:1;opacity:0}8%{opacity:1}100%{stroke-dashoffset:0;opacity:1}}@keyframes fade-trail{to{opacity:0}}@keyframes star-arrive{0%{opacity:.15}20%{opacity:1}100%{opacity:1}}@keyframes fade-star{to{opacity:0}}@media(prefers-reduced-motion:reduce){.trail-core,.trail-glow,.moving-star{animation-duration:.01ms!important;animation-delay:0s!important}}
+@media(max-width:760px){.thought-page{min-height:calc(100vh - 20px);margin:-20px -14px -94px}.thought-intro{top:34px;left:22px;right:22px}.thought-eyebrow{margin-bottom:12px;font-size:9px}.thought-intro h1{max-width:320px;font-size:26px}.thought-intro>p:last-child{font-size:12px}.privacy-status{top:36px;right:18px;padding:8px 12px;font-size:9px}.launch-composer{right:16px;bottom:92px;left:16px;gap:8px;padding:18px 16px 15px;border-radius:24px}.launch-composer h2{font-size:20px}.thought-input{grid-template-columns:minmax(0,1fr) 38px 1px 38px;min-height:50px}.thought-input input{height:48px;padding:0 12px;font-size:12px}.thought-input button{width:38px;height:38px;padding:9px}.launch-scene{inset:160px 8px 270px}.recovery-output{margin-top:118px}}
 </style>
