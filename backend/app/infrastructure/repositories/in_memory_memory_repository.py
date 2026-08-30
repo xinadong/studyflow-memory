@@ -10,6 +10,7 @@ from app.domain.repositories.memory_repository import (
     MemoryRepository,
     MemoryUpdate,
 )
+from app.domain.value_objects.memory_type import MemoryType
 
 
 def _matches(memory: Memory, filters: MemoryFilter) -> bool:
@@ -61,6 +62,8 @@ class InMemoryMemoryRepository(MemoryRepository):
                 setattr(memory, field_name, value)
         if changes.confidence is not None:
             memory.confidence = max(0.0, min(1.0, float(changes.confidence)))
+        if memory.memory_type != MemoryType.RECOVERY_EXPERIENCE:
+            memory.block_type = None
         return memory
 
     def delete(self, memory_id: str) -> bool:

@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from unittest.mock import patch
@@ -400,6 +400,63 @@ class AgentToolCallingTests(unittest.TestCase):
         self.assertEqual(run.status, "success")
         self.assertEqual(run.input_tokens, 22)
 
+    def test_natural_feedback_recovery_cue_with_break_minutes_is_recovery_memory(self):
+        llm = SequencedLLM([LLMResult(
+            text=(
+                '{"memory_type":"task_preference",'
+                '"explicit":true,"confidence":0.95,"block_type":null}'
+            ),
+            model="gemini-3.7-flash",
+        )])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/feedback", json={
+            "user_id": "fatigue-minutes-user",
+            "course": "数据结构与算法",
+            "content": "学累了5分钟，想先休息一下",
+        })
+
+        self.assertEqual(response.status_code, 201)
+        memory = response.json()["memories"][0]
+        self.assertEqual(memory["memory_type"], "recovery_experience")
+        self.assertEqual(memory["block_type"], "fatigue")
+        self.assertEqual(memory["confirmation_status"], "confirmed")
+
+    def test_natural_feedback_review_interval_is_review_schedule(self):
+        llm = SequencedLLM([LLMResult(
+            text=(
+                '{"memory_type":"task_preference",'
+                '"explicit":true,"confidence":0.95,"block_type":null}'
+            ),
+            model="gemini-3.7-flash",
+        )])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/feedback", json={
+            "user_id": "review-feedback-user",
+            "course": "数据结构与算法",
+            "content": "以后每2天复习一次 BFS",
+        })
+
+        self.assertEqual(response.status_code, 201)
+        memory = response.json()["memories"][0]
+        self.assertEqual(memory["memory_type"], "review_schedule")
+        self.assertIsNone(memory["block_type"])
+
+    def test_explicit_recovery_feedback_infers_missing_block_type(self):
+        response = self.client.post("/feedback", json={
+            "user_id": "explicit-fatigue-user",
+            "course": "数据结构与算法",
+            "feedback_type": "recovery_experience",
+            "explicit": True,
+            "content": "很累，先休息一下",
+        })
+
+        self.assertEqual(response.status_code, 201)
+        memory = response.json()["memories"][0]
+        self.assertEqual(memory["memory_type"], "recovery_experience")
+        self.assertEqual(memory["block_type"], "fatigue")
+
     def test_natural_feedback_classification_respects_explicit_explanation_cue(self):
         llm = SequencedLLM([LLMResult(
             text=(
@@ -421,6 +478,31 @@ class AgentToolCallingTests(unittest.TestCase):
             response.json()["memories"][0]["memory_type"],
             "explanation_preference",
         )
+
+    def test_corrected_natural_feedback_clears_classifier_block_scope(self):
+        llm = SequencedLLM([LLMResult(
+            text=(
+                '{"memory_type":"task_preference",'
+                '"explicit":true,"confidence":0.95,"block_type":"too_hard"}'
+            ),
+            model="gemini-3.7-flash",
+        )])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/feedback", json={
+            "user_id": "classifier-scope-user",
+            "course": "数据结构与算法",
+            "content": "以后先看一个例子，再做一道小题。",
+            "task_type": "study",
+            "knowledge_point": "BFS",
+        })
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.json()["memories"][0]["memory_type"],
+            "explanation_preference",
+        )
+        self.assertIsNone(response.json()["memories"][0]["block_type"])
 
     def test_natural_language_knowledge_state_classification_is_rejected_without_writes(self):
         llm = SequencedLLM([LLMResult(
@@ -720,6 +802,45 @@ class AgentToolCallingTests(unittest.TestCase):
         self.assertEqual(response.json()["tasks"][0]["duration_minutes"], 20)
         self.assertIn("20分钟", response.json()["explanation"])
         self.assertNotIn("按30分钟拆分", response.json()["explanation"])
+
+    def test_plan_explanation_does_not_duplicate_spaced_duration_preference(self):
+        session = self.Session()
+        SqlAlchemyMemoryRepository(session).add(Memory(
+            user_id="spaced-duration-user",
+            memory_type=MemoryType.TASK_PREFERENCE,
+            course="数据结构与算法",
+            task_type="study",
+            content="任务时长20分钟",
+            confirmation_status=ConfirmationStatus.CONFIRMED,
+        ))
+        session.close()
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall(
+                "spaced-duration-tool", "split_learning_task", {
+                    "goal": "学习BFS", "available_minutes": 25,
+                    "preferred_minutes": 20, "task_type": "study", "knowledge_point": "BFS",
+                },
+            )], model="gemini-3.7-flash"),
+            LLMResult(
+                text='{"explanation":"根据你已确认的偏好，本次按 20 分钟拆分。"}',
+                model="gemini-3.7-flash",
+            ),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/plan", json={
+            "user_id": "spaced-duration-user",
+            "course": "数据结构与算法",
+            "goal": "学习BFS",
+            "available_minutes": 25,
+            "knowledge_point": "BFS",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["explanation"],
+            "根据你已确认的任务时长偏好，本次按20分钟拆分。",
+        )
 
     def test_plan_overrides_contradictory_model_duration_explanation(self):
         session = self.Session()
@@ -1125,8 +1246,38 @@ class AgentToolCallingTests(unittest.TestCase):
         })
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["action"], "先看遍历示例，再完成一道小题。")
+        self.assertIn("定位难点", response.json()["action"])
+        self.assertIn("回顾前置", response.json()["action"])
+        self.assertIn("基础练习：先看遍历示例，再完成一道小题。", response.json()["action"])
+        self.assertIn("返回原题", response.json()["action"])
         self.assertIn(memory.id, response.json()["used_memory_ids"])
+
+    def test_too_hard_recovery_without_history_returns_progressive_path(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall(
+                "progressive-recovery-tool", "generate_recovery_action", {
+                    "block_type": "too_hard", "context": "队列作用不理解",
+                },
+            )], model="gemini-3.7-flash"),
+            LLMResult(text='{"reason":"按步骤降低难度"}', model="gemini-3.7-flash"),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/recover", json={
+            "user_id": "progressive-recovery-user",
+            "course": "数据结构与算法",
+            "block_type": "too_hard",
+            "context": "队列作用不理解",
+            "knowledge_point": "BFS",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        action = response.json()["action"]
+        self.assertIn("定位难点", action)
+        self.assertIn("回顾前置", action)
+        self.assertIn("基础练习", action)
+        self.assertIn("返回原题", action)
+        self.assertIn("BFS", action)
 
     def test_accepted_recovery_action_is_saved_as_confirmed_memory(self):
         user_id = "accepted-recovery-user"

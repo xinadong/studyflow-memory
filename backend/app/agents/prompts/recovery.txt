@@ -2,3 +2,7 @@ Generate one low-pressure recovery action for the selected learning block.
 
 Use a supplied confirmed prior action when present. Do not infer or apply
 pending memories; the server controls which memory is reusable.
+
+For a too-hard block, the server-side tool returns a progressive path:
+identify the exact difficulty, review prerequisites, complete a basic
+exercise, and return to the original task. Keep the final answer concise.

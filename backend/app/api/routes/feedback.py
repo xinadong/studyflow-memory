@@ -19,6 +19,7 @@ from app.infrastructure.llm.adapter import LLMAdapter, LLMCallError, LLMResult
 from app.infrastructure.models.feedback import FeedbackRecord
 from app.infrastructure.repositories.sqlalchemy_memory_repository import SqlAlchemyMemoryRepository
 from app.infrastructure.telemetry.agent_run import record_agent_run
+from app.memory.review_schedule import parse_review_interval_days
 from app.schemas.feedback import FeedbackCreate, FeedbackResponse
 from app.schemas.memory import MemoryOut
 
@@ -91,6 +92,15 @@ def _correct_memory_type_from_explicit_cue(
     preference just because the provider returned the wrong enum.  Only
     high-signal cues override the model; ambiguous feedback remains unchanged.
     """
+    # Strong schedule and recovery language must win over generic words such
+    # as "分钟", "任务" or "例子".  Real users often combine a block reason
+    # with a small recovery action (for example, "学累了休息5分钟").
+    if _is_review_schedule_cue(content):
+        return MemoryType.REVIEW_SCHEDULE
+    recovery_type = _recovery_type_from_content(content)
+    if recovery_type is not None:
+        return MemoryType.RECOVERY_EXPERIENCE
+
     explanation_cues = (
         "示例优先", "例子优先", "先看示例", "先给我看示例",
         "先看例子", "先给我看例子", "先看案例",
@@ -111,6 +121,30 @@ def _correct_memory_type_from_explicit_cue(
     if task_match:
         return MemoryType.TASK_PREFERENCE
     return memory_type
+
+
+def _is_review_schedule_cue(content: str) -> bool:
+    if parse_review_interval_days(content) is None:
+        return False
+    return any(marker in content for marker in ("复习", "间隔", "隔"))
+
+
+def _recovery_type_from_content(content: str) -> BlockType | None:
+    recovery_cues = (
+        (BlockType.FATIGUE, ("学累了", "累了", "很累", "疲劳", "困", "没精神", "状态不好", "想休息")),
+        (BlockType.TIME, ("没时间", "时间不够", "时间不足", "来不及", "只剩")),
+        (BlockType.TOO_HARD, ("太难", "卡住", "不会", "不理解", "看不懂", "难住")),
+        (BlockType.DISTRACTION, ("杂事", "被打断", "分心", "干扰", "坐不住")),
+    )
+    for block_type, cues in recovery_cues:
+        if any(cue in content for cue in cues):
+            return block_type
+    return None
+
+
+def _infer_block_type_from_content(content: str) -> BlockType | None:
+    """Infer a recovery scope only after recovery has won classification."""
+    return _recovery_type_from_content(content)
 
 
 def _json_mode_call(
@@ -181,6 +215,10 @@ def _classify_feedback(payload: FeedbackCreate, llm: LLMAdapter) -> tuple[
                 repaired_error.format_repair_count = 1
                 raise repaired_error from first_error
         memory_type = _correct_memory_type_from_explicit_cue(payload.content, memory_type)
+        if memory_type == MemoryType.RECOVERY_EXPERIENCE:
+            block_type = block_type or _infer_block_type_from_content(payload.content)
+        else:
+            block_type = None
         return memory_type, explicit, confidence, block_type, trace
     except LLMCallError as error:
         error.model = trace.model or getattr(llm, "model", None)
@@ -236,9 +274,15 @@ def create_feedback(
         feedback_type = payload.feedback_type
         explicit = bool(payload.explicit) if payload.explicit is not None else False
         confidence = 0.5
-        classified_block_type = None
+        classified_block_type = (
+            _infer_block_type_from_content(payload.content)
+            if feedback_type == MemoryType.RECOVERY_EXPERIENCE
+            else None
+        )
 
     block_type = payload.block_type or classified_block_type
+    if feedback_type != MemoryType.RECOVERY_EXPERIENCE:
+        block_type = None
     feedback_id = uuid4().hex
     db.add(FeedbackRecord(
         id=feedback_id, user_id=payload.user_id, course=payload.course,

@@ -108,6 +108,8 @@ class SqlAlchemyMemoryRepository(MemoryRepository):
                 setattr(record, field_name, value.value if hasattr(value, "value") else value)
         if changes.confidence is not None:
             record.confidence = max(0.0, min(1.0, float(changes.confidence)))
+        if record.memory_type != MemoryType.RECOVERY_EXPERIENCE:
+            record.block_type = None
         self.session.commit()
         self.session.refresh(record)
         return _to_entity(record)

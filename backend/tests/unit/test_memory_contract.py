@@ -118,7 +118,21 @@ class MemoryContractTests(unittest.TestCase):
     def test_memory_entity_converts_to_api_schema(self):
         output = MemoryOut.model_validate(self.make_memory())
         self.assertEqual(output.memory_type, MemoryType.TASK_PREFERENCE)
-        self.assertEqual(output.block_type, BlockType.TOO_HARD)
+        self.assertIsNone(output.block_type)
+
+    def test_non_recovery_memory_clears_block_type_scope(self):
+        memory = self.make_memory()
+        self.assertIsNone(memory.block_type)
+
+    def test_recovery_memory_keeps_block_type_scope(self):
+        memory = Memory(
+            user_id="u1",
+            memory_type=MemoryType.RECOVERY_EXPERIENCE,
+            course="数据结构与算法",
+            content="先看示例，再做小题",
+            block_type=BlockType.TOO_HARD,
+        )
+        self.assertEqual(memory.block_type, BlockType.TOO_HARD)
 
 
 if __name__ == "__main__":

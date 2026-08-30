@@ -46,6 +46,7 @@ class UnderstandingQuestionArgs(BaseModel):
 class RecoveryActionArgs(BaseModel):
     block_type: BlockType
     context: str = ""
+    knowledge_point: str | None = None
     preferred_action: str | None = Field(default=None, min_length=1)
 
 

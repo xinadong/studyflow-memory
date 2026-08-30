@@ -1,1 +1,8 @@
-Extract explicit and candidate user preferences from the feedback.
+Classify the feedback into one memory type and return only the requested JSON fields.
+Use this priority when multiple signals appear:
+1. interval review language (for example, every N days, interval N days) -> review_schedule;
+2. explicit learning blocks such as tired, no time, too hard, distracted -> recovery_experience;
+3. example/definition/diagram explanation preference -> explanation_preference;
+4. task duration, splitting or reminder preference -> task_preference.
+For recovery_experience, return the matching block_type. A number of minutes in a
+recovery sentence is a break duration, not a task preference.
