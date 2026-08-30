@@ -175,7 +175,7 @@ onBeforeUnmount(() => {
     </div>
 
     <form class="launch-composer" @submit.prevent="recover()">
-      <div><h2>{{ launched ? '已发射至星空' : '发射此刻心情' }}</h2><p>文字或语音，都会成为一颗星</p></div>
+      <div><h2>{{ launched ? '已发射至星空' : '发射此刻心情' }}</h2><p>当前支持文字输入；语音能力待接入</p></div>
       <div class="thought-input">
         <label class="sr-only" for="thought-context">输入此刻的思绪</label>
         <input id="thought-context" v-model.trim="context" type="text" placeholder="输入此刻的思绪…" :disabled="busy">

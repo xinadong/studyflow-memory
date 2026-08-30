@@ -75,6 +75,8 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}, tim
   }
 }
 
+export const getHealth = () => apiRequest<{ status: string }>('/health', {}, 3_000)
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '发生未知错误。'
 }

@@ -12,12 +12,16 @@ export type TaskStatus = 'pending' | 'active' | 'completed' | 'deferred'
 
 export interface Task {
   id: string
+  course?: string
   title: string
   description: string
   duration_minutes: number
   task_type: string
   knowledge_point?: string | null
+  due_at?: string | null
 }
+
+export interface ImportedTaskConstraint { title: string; due_at: string }
 
 export interface MemoryTrace {
   retrieved_memory_ids: string[]
@@ -32,6 +36,7 @@ export interface PlanRequest {
   available_minutes: number
   task_type: string
   knowledge_point?: string
+  imported_tasks?: ImportedTaskConstraint[]
 }
 
 export interface PlanResponse extends MemoryTrace {

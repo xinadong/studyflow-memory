@@ -10,7 +10,7 @@ function save(){ emit('edit', content.value); editing.value = false }
 </script>
 <template>
   <article class="memory-card card">
-    <div class="row between"><span class="chip" :class="memory.confirmation_status">{{ statusLabels[memory.confirmation_status] }}</span><button class="id-button" :title="memory.id">#{{ memory.id.slice(0,8) }}</button></div>
+<div class="row between"><span class="chip" :class="memory.confirmation_status">{{ statusLabels[memory.confirmation_status] }}</span><code class="id-button" :title="memory.id">#{{ memory.id.slice(0,8) }}</code></div>
     <p class="type">{{ memoryTypeLabels[memory.memory_type] }} · {{ memory.course }}</p>
     <textarea v-if="editing" v-model="content" rows="3" aria-label="编辑记忆内容" />
     <p v-else class="content">{{ memory.content }}</p>

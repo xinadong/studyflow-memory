@@ -1,20 +1,31 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '../stores/session'
 import { usePlanStore } from '../stores/plan'
+import { getHealth } from '../services/api'
 import appIcon from '../assets/studyflow-app.png'
 
 const route = useRoute()
 const session = useSessionStore()
 const plans = usePlanStore()
+const backendStatus = ref<'checking' | 'online' | 'offline'>('checking')
 const nav = [
   { to: '/today', icon: '⌂', label: '弹性任务流' },
   { to: '/study', icon: '◉', label: '理解检验' },
   { to: '/recovery', icon: '✦', label: '思绪星云' },
+  { to: '/profile', icon: '◔', label: '个人中心' },
 ]
-const showAside = computed(() => route.path !== '/recovery')
+const showAside = computed(() => !['/recovery', '/profile'].includes(route.path))
 const isStudy = computed(() => route.path === '/study')
+onMounted(async () => {
+  try {
+    const health = await getHealth()
+    backendStatus.value = health.status === 'ok' ? 'online' : 'offline'
+  } catch {
+    backendStatus.value = 'offline'
+  }
+})
 </script>
 
 <template>
@@ -26,7 +37,7 @@ const isStudy = computed(() => route.path === '/study')
         <img :src="appIcon" alt="StudyFlow" />
         <span><strong>StudyFlow</strong><small>让计划流动，让理解发生</small></span>
       </RouterLink>
-      <div class="agent-online"><i /> Agent 在线</div>
+      <div class="agent-online" :class="backendStatus"><i /> {{ backendStatus === 'checking' ? '正在检查后端' : backendStatus === 'online' ? 'Agent 在线' : '后端未连接' }}</div>
       <nav aria-label="主要导航">
         <RouterLink v-for="item in nav" :key="item.to" :to="item.to">
           <span class="nav-icon">{{ item.icon }}</span><span>{{ item.label }}</span>
@@ -90,7 +101,7 @@ nav a { display: flex; align-items: center; gap: 12px; text-decoration: none; pa
 nav a:hover { background: #f0f3ff; color: var(--brand); }
 nav a.router-link-active { color: var(--brand); background: white; box-shadow: 0 8px 20px rgba(52,71,173,.08); }
 .nav-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; background: #eef2ff; }
-.agent-online{width:max-content;padding:7px 12px;border-radius:14px;background:#e7f8f2;color:#20a77a;font-size:11px}.agent-online i{display:inline-block;width:6px;height:6px;margin-right:5px;border-radius:50%;background:#20a77a}
+.agent-online{width:max-content;padding:7px 12px;border-radius:14px;background:#eef2ff;color:#65719a;font-size:11px}.agent-online i{display:inline-block;width:6px;height:6px;margin-right:5px;border-radius:50%;background:#8c96b5}.agent-online.online{background:#e7f8f2;color:#20a77a}.agent-online.online i{background:#20a77a}.agent-online.offline{background:#fff0f0;color:#d65d68}.agent-online.offline i{background:#d65d68}
 .sidebar-principle { margin-top:0; padding:16px; border:0; border-radius:18px; background:linear-gradient(90deg,#eef2ff,#f1ecff); color: var(--muted); font-size: 9px; box-shadow:none }
 .sidebar-principle b{display:block;margin-bottom:11px;color:#172052;font-size:10px}.sidebar-principle div{display:flex;align-items:center;gap:4px;font-weight:800}.sidebar-principle i { color: var(--brand); font-style: normal; }.sidebar-principle small{display:block;margin-top:9px;color:#9ba4bf;font-size:8px}
 .user-field { margin-top: auto; display: grid; gap: 7px; padding:14px; border-radius:16px; background:#fff; color: var(--muted); font-size: 10px; font-weight: 700; }
@@ -110,7 +121,7 @@ nav a.router-link-active { color: var(--brand); background: white; box-shadow: 0
   .shell, .shell.without-aside { display: block; }
   .sidebar { display: none; }
   .main-content { padding: 20px 14px 94px; }
-  .mobile-nav { position: fixed; z-index: 20; display: grid; grid-template-columns: repeat(3,1fr); bottom: 10px; left: 12px; right: 12px; padding: 6px; border-radius: 20px; background: rgba(255,255,255,.94); backdrop-filter: blur(16px); box-shadow: 0 10px 30px rgba(52,71,173,.18); }
+  .mobile-nav { position: fixed; z-index: 20; display: grid; grid-template-columns: repeat(4,1fr); bottom: 10px; left: 12px; right: 12px; padding: 6px; border-radius: 20px; background: rgba(255,255,255,.94); backdrop-filter: blur(16px); box-shadow: 0 10px 30px rgba(52,71,173,.18); }
   .mobile-nav a { justify-content: center; display: grid; gap: 1px; padding: 5px; font-size: 15px; text-align: center; }
   .mobile-nav small { font-size: 9px; }
 }

@@ -1,10 +1,16 @@
 """Agent 计划、理解检验和恢复 API 模型。"""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from app.domain.value_objects.memory_type import BlockType
+
+
+class ImportedTaskInput(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    due_at: datetime
 
 
 class PlanRequest(BaseModel):
@@ -14,6 +20,7 @@ class PlanRequest(BaseModel):
     available_minutes: int = Field(ge=1, le=240)
     task_type: str = "study"
     knowledge_point: str | None = None
+    imported_tasks: list[ImportedTaskInput] = Field(default_factory=list, max_length=50)
 
 
 class TaskOut(BaseModel):
@@ -23,6 +30,7 @@ class TaskOut(BaseModel):
     duration_minutes: int
     task_type: str
     knowledge_point: str | None = None
+    due_at: datetime | None = None
 
 
 class PlanResponse(BaseModel):

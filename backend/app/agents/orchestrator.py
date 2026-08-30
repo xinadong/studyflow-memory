@@ -470,7 +470,12 @@ class AgentService:
         use_memory: bool = True,
         persist_task: bool = True,
         operation: str = "plan",
+        imported_tasks: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        imported_tasks = imported_tasks or []
+        ordered_imports = sorted(imported_tasks, key=lambda item: item["due_at"].timestamp())
+        selected_import = ordered_imports[0] if ordered_imports else None
+        scheduling_goal = selected_import["title"] if selected_import else goal
         retrieval_started = perf_counter()
         task_memories = (
             self._retrieve(MemoryFilter(
@@ -531,7 +536,7 @@ class AgentService:
                 return {"user_id": user_id, "course": course}
             if call.name == "split_learning_task":
                 return {
-                    "goal": goal, "available_minutes": available_minutes,
+                    "goal": scheduling_goal, "available_minutes": available_minutes,
                     "preferred_minutes": preferred, "task_type": task_type,
                     "knowledge_point": knowledge_point,
                 }
@@ -554,6 +559,14 @@ class AgentService:
                 "learning_state": learning_state,
                 "knowledge_prerequisite_reminder": prerequisite_reminder,
                 "review_schedule_reminder": review_reminder_text,
+                "imported_tasks": [
+                    {"title": item["title"], "due_at": item["due_at"].isoformat()}
+                    for item in ordered_imports
+                ],
+                "selected_task": (
+                    {"title": selected_import["title"], "due_at": selected_import["due_at"].isoformat()}
+                    if selected_import else None
+                ),
                 "instruction": "必须调用工具；最终仅返回JSON对象，字段为 explanation。",
             },
             tool_names=PLAN_TOOL_NAMES,
@@ -564,6 +577,8 @@ class AgentService:
         if not tasks:
             raise LLMCallError("missing_required_tool", "模型调用失败：模型未生成学习任务")
         task = tasks[-1]
+        if selected_import:
+            task["due_at"] = selected_import["due_at"].isoformat()
         if persist_task:
             self.session.add(TaskRecord(
                 id=task["id"], user_id=user_id, course=course, title=task["title"],

@@ -11,6 +11,7 @@ import { useMemoryStore } from '../stores/memory'
 import type { ConfirmationStatus, MemoryType } from '../types'
 
 const session=useSessionStore(), memories=useMemoryStore()
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 const busy=ref(false), saving=ref(false), error=ref(''), success=ref('')
 const filters=reactive<{course:string;memory_type:MemoryType|'';confirmation_status:ConfirmationStatus|''}>({course:'',memory_type:'',confirmation_status:''})
 const feedback=reactive<{content:string;feedback_type:MemoryType|'';explicit:boolean}>({content:'我希望每个学习任务控制在 15 分钟以内',feedback_type:'task_preference',explicit:true})
@@ -22,7 +23,8 @@ async function edit(id:string,content:string){try{await updateMemory(id,{content
 async function remove(id:string){if(!window.confirm('确定删除这条记忆吗？系统会执行软删除并保留审计记录。'))return;try{await deleteMemory(id);await load()}catch(e){error.value=errorMessage(e)}}
 onMounted(load)
 </script>
-<template><section><PageHeader eyebrow="MEMORY CENTER" title="让 Agent 记住真正有用的事" subtitle="待确认记忆不会影响计划；你始终可以确认、修改、拒绝或删除。"><span class="chip pending">{{ memories.pendingCount }} 条待确认</span></PageHeader>
+<template><section class="memory-center" :class="{ embedded }"><PageHeader v-if="!embedded" eyebrow="MEMORY CENTER" title="让 Agent 记住真正有用的事" subtitle="待确认记忆不会影响计划；你始终可以确认、修改、拒绝或删除。"><span class="chip pending">{{ memories.pendingCount }} 条待确认</span></PageHeader>
+  <div v-else class="embedded-heading"><div><p class="eyebrow">MEMORY CENTER</p><h2>我的反馈记忆</h2><p>只有已确认记忆才会影响 Agent；你可以随时确认、修改、归档或删除。</p></div><span class="chip pending">{{ memories.pendingCount }} 条待确认</span></div>
   <form class="feedback-box card panel" @submit.prevent="submit"><div><p class="eyebrow">TELL FLOW AGENT</p><h2>告诉 Flow Agent</h2><p class="muted">明确类型能提高现场演示稳定性；选择自动判断时会调用模型分类。</p></div><div class="field"><label for="feedback">你的反馈</label><textarea id="feedback" v-model.trim="feedback.content" required rows="3" placeholder="例如：先给我看例子，再讲定义。"/></div><div class="feedback-options"><div class="field"><label for="type">记忆类型</label><select id="type" v-model="feedback.feedback_type"><option value="">自动判断类型</option><option value="task_preference">任务偏好</option><option value="explanation_preference">解释偏好</option><option value="recovery_experience">恢复经验</option><option value="review_schedule">复习计划</option></select></div><label class="explicit"><input v-model="feedback.explicit" type="checkbox" :disabled="!feedback.feedback_type"/>这是我的明确偏好</label><button class="btn btn-primary" :disabled="saving||!feedback.content">{{ saving?'正在保存…':'保存为记忆 →' }}</button></div></form>
   <div v-if="success" class="notice success">{{ success }}</div><ErrorNotice v-if="error" :message="error" @retry="load"/>
   <div class="section-title"><h2>我的记忆</h2><button class="link-button" @click="load">刷新</button></div>
