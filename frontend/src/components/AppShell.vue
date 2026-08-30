@@ -5,6 +5,7 @@ import { useSessionStore } from '../stores/session'
 import { usePlanStore } from '../stores/plan'
 import { getHealth } from '../services/api'
 import appIcon from '../assets/studyflow-app.png'
+import flowAgentOrb from '../assets/flow-agent-orb.svg'
 
 const route = useRoute()
 const session = useSessionStore()
@@ -53,7 +54,7 @@ onMounted(async () => {
     <aside v-if="showAside" class="context-aside" :class="{ 'study-aside': isStudy }">
       <template v-if="isStudy">
         <section class="study-agent-card">
-          <div class="assistant-orb"><span>✦</span></div>
+          <div class="assistant-orb" aria-hidden="true"><img :src="flowAgentOrb" alt="" /><span>✦</span></div>
           <p class="eyebrow">FLOW AGENT</p><h2>让每个问题都有依据</h2>
           <p class="muted">根据你选择的任务、材料和提问方式，本轮只生成一个核心问题，避免一次抛出过多提示。</p>
           <div class="study-selection"><b>当前选择</b><strong>{{ session.selectedTask?.title || '高等数学 · 导数应用' }}</strong><span>复述概念 · 可追加关联知识</span></div>
@@ -62,7 +63,7 @@ onMounted(async () => {
         <section class="study-privacy"><b>材料仅用于本轮提问</b><span>页面明确区分当前选择、已确认记忆与本轮生成结果，不把推测写成事实。</span></section>
       </template>
       <template v-else>
-      <div class="assistant-orb"><span>✦</span></div>
+      <div class="assistant-orb" aria-hidden="true"><img :src="flowAgentOrb" alt="" /><span>✦</span></div>
       <p class="eyebrow">FLOW AGENT</p>
       <h2>让每一步都有依据</h2>
       <p class="muted">反馈记忆不是第四个功能，而是贯穿任务生成、理解检验与恢复调整的内部机制。</p>
@@ -110,8 +111,9 @@ nav a.router-link-active { color: var(--brand); background: white; box-shadow: 0
 .context-aside { position: sticky; top: 0; height: 100vh; margin-left:36px; padding: 40px 28px; display:flex; flex-direction:column; gap:18px; background:rgba(255,255,255,.28); border-left:0; }
 .context-aside h2 { margin:0; font-size: 22px; line-height:1.25; }
 .context-aside p { line-height: 1.7; }
-.assistant-orb { width: 74px; height: 81px; display: grid; place-items: center; margin-bottom: 0; border-radius: 32px; background: radial-gradient(circle,#28c7df,#4f8feb 55%,#7657f6); box-shadow: 0 10px 24px rgba(79,99,245,.28); }
-.assistant-orb span { color: white; font-size: 27px; }
+.assistant-orb { position:relative; width:76px; height:76px; flex:0 0 76px; margin-bottom:0; overflow:hidden; border-radius:50%; }
+.assistant-orb img { position:absolute; inset:0; display:block; width:100%; height:100%; }
+.assistant-orb span { position:absolute; inset:8px 23px 21px 16px; display:grid; place-items:center; color:#fff; font-size:48px; font-weight:700; line-height:1; }
 .aside-rule { display:flex;gap:8px;margin:0;font-size:10px }.aside-rule span{padding:7px 10px;border-radius:13px;background:#eef2ff;color:#596387}.aside-rule span:last-child{background:#eee9ff;color:#7657f6}.aside-rule i{display:none}
 .memory-proof{margin-top:0;padding:18px;border:1px solid #d9d5ff;border-radius:22px;background:rgba(255,255,255,.78);box-shadow:0 8px 16px rgba(52,71,173,.1)}.proof-title{margin-bottom:12px;font-size:14px}.used-memory,.memory-impact{display:grid;gap:6px;padding:12px;margin-bottom:10px;border-radius:15px;font-size:11px}.used-memory{background:#f7f5ff}.used-memory b{color:#7657f6;font-size:10px}.memory-impact{background:#ecf8ff}.memory-impact b{color:#28a9c2;font-size:10px}.memory-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.memory-counts div{display:grid;gap:3px;padding:10px 8px;border-radius:14px;background:#f6f8ff}.memory-counts b{font-size:18px;color:#4f63f6}.memory-counts div:nth-child(2) b{color:#20a77a}.memory-counts div:nth-child(3) b{color:#ff8a34}.memory-counts span{color:#7b88aa;font-size:9px}.demo-boundary{display:grid;gap:5px;padding:14px;border-radius:18px;background:#fff8ef;font-size:10px}.demo-boundary b{color:#ff8a34;font-size:11px}.demo-boundary span{color:#596387;line-height:1.5}
 .mobile-nav { display: none; }
