@@ -95,6 +95,26 @@ def select_used_memories(result: RetrievalResult, memory_ids: list[str]) -> Retr
     )
 
 
+def merge_retrieval_results(
+    *results: RetrievalResult,
+    limit: int = 5,
+    max_memory_tokens: int = 300,
+) -> RetrievalResult:
+    """Merge independently scoped retrievals under one shared budget."""
+    memories: list[Memory] = []
+    seen: set[str] = set()
+    for result in results:
+        for memory in result.retrieved:
+            if memory.id not in seen:
+                seen.add(memory.id)
+                memories.append(memory)
+    return retrieve_memory_candidates(
+        memories,
+        limit=limit,
+        max_memory_tokens=max_memory_tokens,
+    )
+
+
 def mark_used(result: RetrievalResult) -> RetrievalResult:
     """返回结果本身，供调用方明确哪些 confirmed 记忆影响了输出。"""
     return result

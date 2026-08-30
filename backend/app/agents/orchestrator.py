@@ -30,9 +30,11 @@ from app.infrastructure.telemetry.agent_run import record_agent_run
 from app.infrastructure.telemetry.token_tracker import estimate_tokens
 from app.memory.retriever import (
     RetrievalResult,
+    merge_retrieval_results,
     retrieve_memory_candidates,
     select_used_memories,
 )
+from app.memory.review_schedule import is_review_due, review_reminder
 from app.memory.writer import save_feedback_memory
 
 
@@ -83,6 +85,33 @@ def _explanation_style(content: str) -> str | None:
     if any(keyword in content for keyword in ("图示", "画图", "可视化", "流程图")):
         return "diagram_first"
     return None
+
+
+def _remove_duration_explanation(content: str) -> str:
+    """Remove model-written duration claims before adding one canonical sentence."""
+    parts = re.split(r"(?<=[。！？；;\n])", content)
+    kept: list[str] = []
+    for part in parts:
+        if re.search(r"\d+\s*分钟", part) and re.search(
+            r"偏好|时长|拆分|安排|任务", part,
+        ):
+            continue
+        kept.append(part)
+    cleaned = "".join(kept)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.strip(" 。；;，,")
+
+
+def _contains_review_reminder(content: str, reminder: str) -> bool:
+    """Detect the canonical reminder even when the model inserts spaces."""
+    normalized_content = re.sub(r"\s+", "", content)
+    normalized_reminder = re.sub(r"\s+", "", reminder)
+    if normalized_reminder in normalized_content:
+        return True
+    return (
+        "复习提醒" in normalized_content
+        and "已到复习时间" in normalized_content
+    )
 
 
 def _json_object(text: str | None) -> dict[str, Any]:
@@ -226,10 +255,7 @@ class AgentService:
                     return False
             elif memory.knowledge_point not in (None, filters.knowledge_point):
                 return False
-            if filters.block_type is None:
-                if memory.block_type is not None:
-                    return False
-            elif memory.block_type not in (None, filters.block_type):
+            if filters.block_type is not None and memory.block_type not in (None, filters.block_type):
                 return False
             return memory.is_usable
 
@@ -446,7 +472,7 @@ class AgentService:
         operation: str = "plan",
     ) -> dict[str, Any]:
         retrieval_started = perf_counter()
-        memories = (
+        task_memories = (
             self._retrieve(MemoryFilter(
                 user_id=user_id, course=course, task_type=task_type,
                 memory_type=MemoryType.TASK_PREFERENCE,
@@ -455,6 +481,16 @@ class AgentService:
             if use_memory
             else RetrievalResult(retrieved=[], used=[], candidates=[])
         )
+        review_memories = (
+            self._retrieve(MemoryFilter(
+                user_id=user_id, course=course, task_type=task_type,
+                memory_type=MemoryType.REVIEW_SCHEDULE,
+                knowledge_point=knowledge_point,
+            ))
+            if use_memory
+            else RetrievalResult(retrieved=[], used=[], candidates=[])
+        )
+        memories = merge_retrieval_results(task_memories, review_memories)
         retrieval_ms = int((perf_counter() - retrieval_started) * 1000)
         self._last_retrieval_ms = retrieval_ms
         preferred = next((
@@ -462,12 +498,21 @@ class AgentService:
             for memory in memories.used
             if memory.memory_type == MemoryType.TASK_PREFERENCE and _minutes(memory.content)
         ), None)
+        due_review = next((
+            memory for memory in memories.used
+            if memory.memory_type == MemoryType.REVIEW_SCHEDULE
+            and is_review_due(
+                memory.content,
+                memory.last_used_at or memory.created_at,
+            )
+        ), None)
+        review_reminder_text = review_reminder(due_review.content) if due_review else None
         memories = select_used_memories(
             memories,
             [
                 memory.id for memory in memories.used
                 if memory.memory_type == MemoryType.TASK_PREFERENCE and _minutes(memory.content)
-            ],
+            ] + ([due_review.id] if due_review else []),
         )
         self._last_memory_result = memories
         learning_state = execute_tool(
@@ -508,6 +553,7 @@ class AgentService:
                 "confirmed_memories": [m.content for m in memories.used],
                 "learning_state": learning_state,
                 "knowledge_prerequisite_reminder": prerequisite_reminder,
+                "review_schedule_reminder": review_reminder_text,
                 "instruction": "必须调用工具；最终仅返回JSON对象，字段为 explanation。",
             },
             tool_names=PLAN_TOOL_NAMES,
@@ -538,20 +584,20 @@ class AgentService:
         explanation = final["explanation"]
         if preferred is not None:
             actual_minutes = task["duration_minutes"]
+            explanation = _remove_duration_explanation(explanation)
             if actual_minutes != preferred:
-                explanation = re.sub(
-                    rf"(?:本次)?按\s*{preferred}\s*分钟(?:拆分|安排)?[。.]?",
-                    "",
-                    explanation,
-                ).strip()
                 explanation = (
                     f"{explanation} 你通常偏好{preferred}分钟，但本次只有{available_minutes}分钟可用，"
                     f"因此安排为{actual_minutes}分钟。"
                 ).strip()
-            elif f"{preferred}分钟" not in explanation:
-                explanation = f"{explanation} 根据你已确认的任务时长偏好，本次按{actual_minutes}分钟拆分。"
+            else:
+                explanation = (
+                    f"{explanation} 根据你已确认的任务时长偏好，本次按{actual_minutes}分钟拆分。"
+                ).strip()
         if prerequisite_reminder and prerequisite_reminder not in explanation:
             explanation = f"{explanation} {prerequisite_reminder}"
+        if review_reminder_text and not _contains_review_reminder(explanation, review_reminder_text):
+            explanation = f"{explanation} {review_reminder_text}"
         return {
             "tasks": [task],
             "explanation": explanation,
@@ -683,6 +729,7 @@ class AgentService:
                     "block_type": block_type,
                     "context": context,
                     "preferred_action": preferred_memory.content if preferred_memory else None,
+                    "knowledge_point": knowledge_point,
                 }
             return call.arguments
 

@@ -1,11 +1,13 @@
 import unittest
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker
 
-from app.infrastructure.database import _upgrade_agent_runs_schema
+from app.infrastructure.database import _cleanup_memory_scope, _upgrade_agent_runs_schema
 from app.infrastructure.repositories.in_memory_memory_repository import InMemoryMemoryRepository
 from app.domain.entities.memory import Memory
 from app.domain.value_objects.memory_type import MemoryType
@@ -15,6 +17,7 @@ from app.core.config import Settings
 from app.agents.tools.split_learning_task import split_learning_task
 from app.agents.tools.adjust_learning_plan import adjust_learning_plan
 from app.agents.tool_registry import AdjustPlanArgs
+from app.infrastructure.models.memory import MemoryRecord
 
 
 class RuntimeFixTests(unittest.TestCase):
@@ -59,6 +62,41 @@ class RuntimeFixTests(unittest.TestCase):
         }.issubset(columns))
         with engine.begin() as connection:
             _upgrade_agent_runs_schema(connection)
+
+    def test_memory_scope_cleanup_is_idempotent_and_preserves_rows(self):
+        engine = create_engine("sqlite://")
+        from app.infrastructure.database import Base
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        session.add_all([
+            MemoryRecord(
+                id="scope-cleanup-task", user_id="u1", memory_type="task_preference",
+                course="数据结构与算法", content="20分钟", block_type="too_hard",
+                confirmation_status="confirmed", active=True,
+                created_at=datetime.now(timezone.utc),
+            ),
+            MemoryRecord(
+                id="scope-cleanup-recovery", user_id="u1", memory_type="recovery_experience",
+                course="数据结构与算法", content="先看示例", block_type="too_hard",
+                confirmation_status="confirmed", active=True,
+                created_at=datetime.now(timezone.utc),
+            ),
+        ])
+        session.commit()
+        session.close()
+
+        with engine.begin() as connection:
+            _cleanup_memory_scope(connection)
+            _cleanup_memory_scope(connection)
+
+        session = Session()
+        task = session.get(MemoryRecord, "scope-cleanup-task")
+        recovery = session.get(MemoryRecord, "scope-cleanup-recovery")
+        self.assertIsNone(task.block_type)
+        self.assertEqual(recovery.block_type, "too_hard")
+        self.assertEqual(session.query(MemoryRecord).count(), 2)
+        session.close()
 
     def test_split_task_never_exceeds_available_minutes_below_five(self):
         task = split_learning_task(goal="快速回顾", available_minutes=3)

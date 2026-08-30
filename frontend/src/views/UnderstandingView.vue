@@ -1,96 +1,72 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import PageHeader from '../components/PageHeader.vue'
+import { computed, ref } from 'vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 import MemoryReference from '../components/MemoryReference.vue'
 import UnderstandingQuestion from '../components/UnderstandingQuestion.vue'
 import { checkUnderstanding } from '../services/agent'
 import { errorMessage } from '../services/api'
+import { usePlanStore } from '../stores/plan'
 import { useSessionStore } from '../stores/session'
-import type { UnderstandingCheckResponse, UnderstandingLevel } from '../types'
+import type { Task, UnderstandingCheckResponse, UnderstandingLevel } from '../types'
+import uploadMaterialIcon from '../assets/upload-material.svg'
 
-const session = useSessionStore()
-const level = ref<UnderstandingLevel>('recall')
-const material = ref('')
-const answer = ref('')
-const result = ref<UnderstandingCheckResponse | null>(null)
-const busy = ref(false)
-const error = ref('')
+const session = useSessionStore(), plans = usePlanStore()
+const level = ref<UnderstandingLevel>('recall'), material = ref(''), answer = ref('')
+const materialInput = ref<HTMLInputElement | null>(null)
+const selectedMaterialName = ref('')
+const result = ref<UnderstandingCheckResponse | null>(null), busy = ref(false), error = ref('')
 const levels: UnderstandingLevel[] = ['recall', 'relate', 'transfer']
-
-async function requestQuestion(withAnswer = false) {
-  busy.value = true
-  error.value = ''
-  try {
-    result.value = await checkUnderstanding({
-      user_id: session.userId,
-      course: session.course,
-      knowledge_point: session.selectedTask?.knowledge_point || session.knowledgePoint || '当前知识点',
-      task_type: session.selectedTask?.task_type || 'study',
-      material: material.value,
-      level: level.value,
-      ...(withAnswer ? { answer: answer.value } : {}),
-    })
-  } catch (e) { error.value = errorMessage(e) }
-  finally { busy.value = false }
+const levelCards = [
+  { value:'recall' as const, icon:'▤', title:'复述概念', subtitle:'用自己的话讲清楚' },
+  { value:'relate' as const, icon:'⌘', title:'关联知识', subtitle:'连接已学内容' },
+  { value:'transfer' as const, icon:'↗', title:'迁移应用', subtitle:'把理解用于新问题' },
+]
+const previewTasks: Task[] = [
+  { id:'study-preview-1', title:'高等数学 · 导数应用', description:'09:00–09:35 · 今日任务', duration_minutes:35, task_type:'study', knowledge_point:'导数应用' },
+  { id:'study-preview-2', title:'英语六级核心词汇 Unit 3', description:'10:30–11:00 · 今日任务', duration_minutes:30, task_type:'study', knowledge_point:'核心词汇' },
+  { id:'study-preview-3', title:'《计算机网络》第五章', description:'已顺延至明日 14:00', duration_minutes:40, task_type:'study', knowledge_point:'计算机网络' },
+]
+const availableTasks = computed(() => plans.plan?.tasks.length ? plans.plan.tasks.slice(0,3) : previewTasks)
+const activeTask = computed(() => session.selectedTask || availableTasks.value[0])
+function selectTask(task: Task){ session.selectedTask=task; result.value=null; answer.value='' }
+function taskStatus(index:number){ return index===0?'已完成':index===1?'待开始':'已顺延' }
+function chooseMaterial(){ materialInput.value?.click() }
+async function onMaterialSelected(event: Event){
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if(!file) return
+  selectedMaterialName.value = file.name
+  material.value = file.type.startsWith('text/') ? await file.text() : `已选择学习资料：${file.name}`
 }
-
-function selectLevel(value: UnderstandingLevel) {
-  level.value = value
-  result.value = null
-  answer.value = ''
-}
-
-function nextLevel() {
-  const index = levels.indexOf(level.value)
-  selectLevel(levels[Math.min(index + 1, levels.length - 1)])
-  requestQuestion()
-}
+async function requestQuestion(withAnswer=false){ busy.value=true; error.value=''; try{ result.value=await checkUnderstanding({user_id:session.userId,course:session.course,knowledge_point:activeTask.value?.knowledge_point||session.knowledgePoint||'当前知识点',task_type:activeTask.value?.task_type||'study',material:material.value,level:level.value,...(withAnswer?{answer:answer.value}:{})}) }catch(e){error.value=errorMessage(e)}finally{busy.value=false} }
+function selectLevel(value:UnderstandingLevel){level.value=value;result.value=null;answer.value=''}
+function nextLevel(){const i=levels.indexOf(level.value);selectLevel(levels[Math.min(i+1,levels.length-1)]);requestQuestion()}
 </script>
 
 <template>
-  <section>
-    <PageHeader eyebrow="SOCRATIC CHECK" title="苏格拉底理解检验" subtitle="每轮只问一个核心问题，从复述到关联，再走向迁移">
-      <RouterLink class="btn btn-secondary" to="/recovery">我卡住了</RouterLink>
-    </PageHeader>
-
-    <div class="task-context card panel">
-      <div><p class="eyebrow">当前检验内容</p><h2>{{ session.selectedTask?.title || session.goal }}</h2><p class="muted">{{ session.course }} · {{ session.selectedTask?.knowledge_point || session.knowledgePoint }}</p></div>
-      <span class="chip success">形成性反馈</span>
-    </div>
-
-    <div class="principles">
-      <div><b>01</b><strong>复述</strong><small>能否用自己的话说明</small></div>
-      <i>→</i>
-      <div><b>02</b><strong>关联</strong><small>能否连接已有知识</small></div>
-      <i>→</i>
-      <div><b>03</b><strong>迁移</strong><small>能否用于新情境</small></div>
-    </div>
-
-    <div class="card panel material">
-      <div class="field"><label for="material">预置课程材料或摘要</label><textarea id="material" v-model="material" rows="3" placeholder="粘贴本次学习材料的关键内容；文件不会被上传。" /></div>
-      <span class="chip">本轮材料</span>
-    </div>
-
-    <div class="level-row">
-      <button v-for="item in levels" :key="item" :class="{ active: level === item }" @click="selectLevel(item)">{{ { recall:'01 复述', relate:'02 关联', transfer:'03 迁移' }[item] }}</button>
-    </div>
-
-    <button v-if="!result && !busy" class="btn btn-primary start-check" @click="requestQuestion()">生成本轮核心问题 →</button>
-    <LoadingState v-if="busy" text="正在结合课程材料与解释偏好生成问题…" />
-    <ErrorNotice v-if="error" :message="error" @retry="requestQuestion(Boolean(answer))" />
-    <UnderstandingQuestion v-if="result" :result="result" :answer="answer" :busy="busy" @update:answer="answer=$event" @submit="requestQuestion(true)" />
-    <MemoryReference v-if="result" :retrieved="result.retrieved_memory_ids" :used="result.used_memory_ids" :candidates="result.candidate_memory_ids" />
-
-    <div v-if="result?.assessed_level" class="finish-row card panel">
-      <div><span class="chip success">本轮形成性反馈已生成</span><h3>回答证据将用于更新相关知识状态</h3><p class="muted small">这不是严格的掌握证明，也不会跨主题推断你的能力。</p></div>
-      <button class="btn btn-primary" :disabled="level === 'transfer'" @click="nextLevel">下一层检验 →</button>
+<section class="study-page">
+  <header class="study-header"><p class="study-eyebrow">SOCRATIC CHECK · FLOW TUTOR</p><h1>苏格拉底理解检验</h1><p>选择今天的学习任务与提问方式，让 Flow Tutor 只问一个真正关键的问题。</p></header>
+  <section class="selection-section">
+    <div class="selection-heading"><span class="step-badge">01</span><h2>选择要检验的学习任务</h2><span class="choice-pill">必选</span></div>
+    <div class="task-selector"><div class="selector-toolbar"><span>从今日任务中选择一项</span><button type="button">＋ 自定义任务</button></div>
+      <button v-for="(task,index) in availableTasks" :key="task.id" type="button" class="task-option" :class="{active:activeTask?.id===task.id}" @click="selectTask(task)"><span class="radio"><i /></span><span class="task-label"><strong>{{task.title}}</strong><small>{{plans.plan?`${task.duration_minutes} 分钟 · ${task.description}`:task.description}}</small></span><span class="status" :class="`status-${index}`">{{taskStatus(index)}}</span></button>
     </div>
   </section>
+  <section class="selection-section level-section">
+    <div class="selection-heading mode-heading"><span class="step-badge">02</span><div><h2>选择苏格拉底提问方式</h2><p>决定 Flow Tutor 如何追问</p></div><span class="choice-pill">单选</span></div>
+    <div class="mode-grid"><button v-for="item in levelCards" :key="item.value" type="button" class="mode-card" :class="{active:level===item.value}" @click="selectLevel(item.value)"><span class="mode-icon">{{item.icon}}</span><i v-if="level===item.value"/><strong>{{item.title}}</strong><small>{{item.subtitle}}</small></button></div>
+  </section>
+  <div class="action-grid">
+    <article class="upload-card"><span class="upload-icon" aria-hidden="true"><img :src="uploadMaterialIcon" alt="" /></span><span class="upload-copy"><strong>上传学习资料</strong><small>让 Flow Tutor 围绕你的材料提问</small></span><span class="file-types">{{ selectedMaterialName || 'PDF · 网页 · 笔记 · 图片' }}</span><button class="choose-material" type="button" @click="chooseMaterial">选择资料</button><input ref="materialInput" class="sr-only" type="file" accept=".pdf,.txt,.md,.doc,.docx,image/*" @change="onMaterialSelected"/></article>
+    <button v-if="!result&&!busy" class="start-companion" type="button" @click="requestQuestion()"><strong>开始伴学 <span>→</span></strong><small>已选择 1 个任务 · 1 种方式</small></button>
+  </div>
+  <LoadingState v-if="busy" text="正在结合课程材料与解释偏好生成问题…"/><ErrorNotice v-if="error" :message="error" @retry="requestQuestion(Boolean(answer))"/><UnderstandingQuestion v-if="result" :result="result" :answer="answer" :busy="busy" @update:answer="answer=$event" @submit="requestQuestion(true)"/><MemoryReference v-if="result" :retrieved="result.retrieved_memory_ids" :used="result.used_memory_ids" :candidates="result.candidate_memory_ids"/>
+  <div v-if="result?.assessed_level" class="finish-row card panel"><div><span class="chip success">本轮形成性反馈已生成</span><h3>回答证据将用于更新相关知识状态</h3><p class="muted small">这不是严格的掌握证明，也不会跨主题推断你的能力。</p></div><button class="btn btn-primary" :disabled="level==='transfer'" @click="nextLevel">下一层检验 →</button></div>
+</section>
 </template>
 
 <style scoped>
-.task-context{display:flex;justify-content:space-between;align-items:flex-start}.task-context h2{margin:5px 0 7px}.principles{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:12px;margin:20px 0}.principles>div{display:grid;gap:5px;padding:17px;border-radius:18px;background:white;border:1px solid var(--border)}.principles b{color:var(--brand);font-size:12px}.principles small{color:var(--muted)}.principles i{font-style:normal;color:var(--brand)}.material{display:flex;align-items:center;gap:20px}.material .field{flex:1}.level-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:22px 0}.level-row button{padding:12px;border:0;border-radius:13px;background:#eef2ff;color:var(--muted);font-weight:800}.level-row button.active{background:var(--brand);color:white}.start-check{width:100%;margin-bottom:18px}.finish-row{margin-top:18px;display:flex;justify-content:space-between;align-items:center}.finish-row h3{margin:10px 0 5px}.finish-row p{margin:0}
-@media(max-width:760px){.principles{grid-template-columns:1fr}.principles i{display:none}.material,.finish-row{display:grid}.task-context{gap:12px}.level-row{font-size:12px}}
+.study-page{width:820px;color:var(--text)}.study-header{height:126px}.study-eyebrow{margin:0 0 4px;color:var(--brand);font-size:12px;font-weight:800}.study-header h1{margin:0 0 5px;font-size:34px;line-height:1.18}.study-header>p:last-child{margin:0;color:var(--muted);font-size:13px}.selection-section{margin-bottom:26px}.selection-heading{height:42px;display:grid;grid-template-columns:42px 1fr 78px;align-items:start;gap:14px}.selection-heading h2{margin:0;font-size:21px;line-height:32px}.step-badge{display:grid;place-items:center;width:42px;height:32px;border-radius:16px;background:linear-gradient(90deg,#4fe5f0,#8c73ff);color:#fff;font-size:14px;font-weight:800}.choice-pill{display:grid;place-items:center;width:78px;height:32px;border:1px solid rgba(209,214,209,.8);border-radius:16px;background:rgba(255,255,255,.58);color:var(--muted);font-size:12px}.task-selector{height:286px;padding:18px 23px;border:1px solid rgba(255,255,255,.9);border-radius:24px;background:linear-gradient(100deg,rgba(237,250,255,.82),rgba(242,235,255,.72))}.selector-toolbar{height:39px;display:flex;justify-content:space-between;color:var(--muted);font-size:12px}.selector-toolbar button{border:0;background:transparent;color:var(--brand);font-size:12px;font-weight:800}.task-option{width:100%;height:58px;margin-bottom:12px;padding:0 14px 0 17px;display:grid;grid-template-columns:22px 1fr 86px;align-items:center;gap:13px;border:1px solid rgba(255,255,255,.8);border-radius:18px;background:rgba(255,255,255,.55);color:var(--text);text-align:left}.task-option.active{border-color:#73dbeb;background:rgba(255,255,255,.62)}.radio{width:20px;height:20px;display:grid;place-items:center;border:1px solid #a6b7dc;border-radius:50%;background:#fff}.task-option.active .radio{border-color:#637df5;background:#637df5}.task-option.active .radio i{width:8px;height:8px;border-radius:50%;background:#fff}.task-label{min-width:0;display:grid;gap:3px}.task-label strong{overflow:hidden;font-size:14px;text-overflow:ellipsis;white-space:nowrap}.task-label small{color:#7387b2;font-size:10px}.status{justify-self:end;width:76px;padding:7px 0;border-radius:15px;text-align:center;font-size:10px;font-weight:800}.status-0{background:rgba(214,237,235,.9);color:#21a67a}.status-1{background:rgba(224,232,255,.9);color:#4f7df2}.status-2{background:rgba(255,229,214,.9);color:#ff7329}.level-section{margin-bottom:20px}.mode-heading{height:62px}.mode-heading p{margin:-3px 0 0;color:#7387b2;font-size:11px}.mode-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.mode-card{position:relative;height:178px;padding:20px;display:flex;flex-direction:column;align-items:flex-start;border:1px solid rgba(255,255,255,.9);border-radius:24px;background:rgba(255,255,255,.62);color:var(--text);text-align:left}.mode-card.active{background:linear-gradient(45deg,#8c6bf5,#6191ff 52%,#4fdbed);color:#fff}.mode-icon{width:48px;height:48px;display:grid;place-items:center;border:1px solid rgba(219,211,211,.8);border-radius:14px;background:rgba(255,255,255,.72);color:#617ab8;font-size:21px}.mode-card.active .mode-icon{border-color:rgba(255,255,255,.8);background:rgba(255,255,255,.22);color:#fff}.mode-card>i{position:absolute;right:22px;top:22px;width:12px;height:12px;border-radius:50%;background:#fff}.mode-card strong{margin-top:17px;font-size:19px}.mode-card small{margin-top:10px;color:#7387b2;font-size:12px}.mode-card.active small{color:#ebf5ff}.action-grid{display:grid;grid-template-columns:542px 260px;gap:18px}.upload-card{height:118px;padding:18px 20px;display:grid;grid-template-columns:62px minmax(0,1fr) 116px;grid-template-rows:62px 20px;gap:7px 14px;border:1px solid rgba(255,255,255,.9);border-radius:24px;background:linear-gradient(100deg,rgba(240,252,255,.86),rgba(245,237,255,.78));overflow:hidden}.upload-icon{width:62px;height:62px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.9);border-radius:20px;background:linear-gradient(90deg,rgba(221,251,255,.96),rgba(233,225,255,.96));box-shadow:0 6px 14px rgba(122,145,230,.17)}.upload-icon img{display:block;width:28px;height:28px}.upload-copy{display:grid;align-content:center;gap:7px}.upload-copy strong{font-size:19px}.upload-copy small,.file-types{color:#7387b2;font-size:10px}.file-types{grid-column:1/3;align-self:end;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.choose-material{grid-column:3;grid-row:1/3;align-self:end;width:116px;height:34px;margin-bottom:1px;border:0;border-radius:17px;background:linear-gradient(90deg,#4fe5f0,#617df2);color:#fff;font-size:12px;font-weight:800}.start-companion{height:118px;display:grid;place-content:center;gap:11px;border:0;border-radius:24px;background:linear-gradient(90deg,#4fe5f0,#618cff 55%,#8c6bf5);color:#fff}.start-companion strong{font-size:28px}.start-companion small{color:#ebf5ff;font-size:10px}.finish-row{margin-top:18px;display:flex;justify-content:space-between;align-items:center}.finish-row h3{margin:10px 0 5px}.finish-row p{margin:0}
+@media(max-width:1100px){.study-page{width:100%}.task-selector{height:auto}.action-grid{grid-template-columns:minmax(0,2fr) minmax(220px,1fr)}}
+@media(max-width:760px){.study-header{height:auto;margin-bottom:24px}.study-header h1{font-size:27px}.selection-heading{grid-template-columns:38px 1fr 60px}.step-badge{width:38px}.choice-pill{width:60px}.selection-heading h2{font-size:18px}.task-selector{padding:14px}.task-option{grid-template-columns:22px minmax(0,1fr);height:auto;min-height:68px}.status{grid-column:2;justify-self:start;margin-top:-8px}.mode-grid,.action-grid{grid-template-columns:1fr}.mode-card{height:142px}.mode-card strong{margin-top:12px}.upload-card{height:auto;min-height:150px;grid-template-columns:62px minmax(0,1fr);grid-template-rows:62px 34px;align-content:center}.file-types{grid-column:1/2}.choose-material{grid-column:2;grid-row:2;justify-self:end}.start-companion{height:96px}.finish-row{display:grid;gap:16px}}
 </style>

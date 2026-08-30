@@ -1,5 +1,6 @@
 .env
 *.db
+*.bak
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -11,3 +12,5 @@ node_modules/
 dist/
 .idea/
 .vscode/
+
+backend/.venv-local/

@@ -46,5 +46,7 @@ def save_feedback_memory(
         source_feedback=source_feedback,
         confidence=confidence,
     )
-    memory.block_type = block_type
+    memory_type_value = memory_type.value if hasattr(memory_type, "value") else memory_type
+    if memory_type_value == "recovery_experience":
+        memory.block_type = block_type
     return save_memory(repository, memory, commit=commit)

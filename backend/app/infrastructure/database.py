@@ -34,6 +34,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
         _upgrade_agent_runs_schema(connection)
+        _cleanup_memory_scope(connection)
 
 
 def _upgrade_agent_runs_schema(connection) -> None:
@@ -64,6 +65,21 @@ def _upgrade_agent_runs_schema(connection) -> None:
             connection.exec_driver_sql(
                 f"ALTER TABLE agent_runs ADD COLUMN {name} {definition}"
             )
+
+
+def _cleanup_memory_scope(connection) -> None:
+    """Clear stale block scopes from non-recovery memories.
+
+    Older versions could persist ``block_type`` before a feedback classifier
+    corrected the memory type.  The cleanup is idempotent and preserves the
+    memory row and its audit fields while restoring the domain scope rule.
+    """
+    if "memories" not in inspect(connection).get_table_names():
+        return
+    connection.exec_driver_sql(
+        "UPDATE memories SET block_type = NULL "
+        "WHERE memory_type <> 'recovery_experience' AND block_type IS NOT NULL"
+    )
 
 
 # Import models after Base is defined so metadata is registered for create_all().

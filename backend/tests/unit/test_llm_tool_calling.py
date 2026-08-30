@@ -50,6 +50,35 @@ class LLMToolCallingTests(unittest.TestCase):
             MemoryType.TASK_PREFERENCE,
         )
 
+    def test_too_hard_recovery_action_has_progressive_steps(self):
+        from app.agents.tools.generate_recovery_action import generate_recovery_action
+        from app.domain.value_objects.memory_type import BlockType
+
+        result = generate_recovery_action(
+            block_type=BlockType.TOO_HARD,
+            context="队列作用不理解",
+            knowledge_point="BFS",
+        )
+        self.assertIn("定位难点", result["action"])
+        self.assertIn("回顾前置", result["action"])
+        self.assertIn("基础练习", result["action"])
+        self.assertIn("返回原题", result["action"])
+        self.assertIn("BFS", result["action"])
+
+    def test_old_simple_recovery_action_is_nested_once_as_basic_practice(self):
+        from app.agents.tools.generate_recovery_action import generate_recovery_action
+        from app.domain.value_objects.memory_type import BlockType
+
+        result = generate_recovery_action(
+            block_type=BlockType.TOO_HARD,
+            context="队列作用不理解",
+            knowledge_point="BFS",
+            preferred_action="先看一个遍历示例，再完成一道小题。",
+        )
+        self.assertEqual(result["action"].count("定位难点"), 1)
+        self.assertEqual(result["action"].count("基础练习"), 1)
+        self.assertIn("基础练习：先看一个遍历示例，再完成一道小题。", result["action"])
+
     def test_final_json_parser_accepts_a_fenced_json_object(self):
         self.assertEqual(
             _json_object("```json\n{\"explanation\":\"已生成任务\"}\n```"),

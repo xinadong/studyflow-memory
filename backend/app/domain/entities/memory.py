@@ -39,6 +39,12 @@ class Memory:
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
         if self.use_count < 0:
             raise ValueError("use_count cannot be negative")
+        # ``block_type`` is meaningful only for recovery experiences.  Older
+        # feedback classifiers could attach a block scope before their
+        # memory type was corrected; normalising at the domain boundary keeps
+        # those records from accidentally narrowing plan/check retrieval.
+        if self.memory_type != MemoryType.RECOVERY_EXPERIENCE:
+            self.block_type = None
 
     @property
     def is_usable(self) -> bool:

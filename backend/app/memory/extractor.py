@@ -15,5 +15,6 @@ def extract_memory_from_feedback(
         explicit=explicit, task_type=task_type, knowledge_point=knowledge_point,
         source_feedback=source_feedback,
     )
-    memory.block_type = block_type
+    if feedback_type == MemoryType.RECOVERY_EXPERIENCE:
+        memory.block_type = block_type
     return memory

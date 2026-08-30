@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -13,6 +13,25 @@ from app.infrastructure.database import Base
 from app.infrastructure.llm.adapter import UnconfiguredLLMAdapter
 from app.infrastructure.models.agent_runs import AgentRunRecord
 from app.main import app
+
+
+class _PlanLLM:
+    model = "test-model"
+
+    def __init__(self):
+        self.calls = []
+
+    def chat(self, messages, *, tools=None, tool_choice="auto", response_format=None):
+        from app.infrastructure.llm.adapter import LLMResult, ToolCall
+        self.calls.append({"messages": messages, "tools": tools, "tool_choice": tool_choice})
+        if len(self.calls) == 1:
+            return LLMResult(text=None, tool_calls=[ToolCall(
+                "plan-tool", "split_learning_task", {
+                    "goal": "复习BFS", "available_minutes": 25,
+                    "preferred_minutes": None, "task_type": "study", "knowledge_point": "BFS",
+                },
+            )], model=self.model)
+        return LLMResult(text='{"explanation":"已生成学习任务"}', model=self.model)
 
 
 class BackendBWorkTests(unittest.TestCase):
@@ -108,6 +127,23 @@ class BackendBWorkTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["memories"][0]["confirmation_status"], "pending")
 
+    def test_feedback_type_correction_clears_block_scope(self):
+        response = self.client.post(
+            "/feedback",
+            json={
+                "user_id": "scope-feedback-user",
+                "course": "数据结构与算法",
+                "feedback_type": "task_preference",
+                "content": "以后任务控制在20分钟",
+                "explicit": True,
+                "task_type": "study",
+                "block_type": "too_hard",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["memories"][0]["memory_type"], "task_preference")
+        self.assertIsNone(response.json()["memories"][0]["block_type"])
+
     def test_knowledge_state_feedback_is_rejected_without_writes(self):
         response = self.client.post(
             "/feedback",
@@ -191,6 +227,133 @@ class BackendBWorkTests(unittest.TestCase):
         response = self.client.get("/metrics")
         self.assertEqual(response.status_code, 200)
         self.assertIn("agent_runs", response.json())
+
+    def test_due_review_schedule_is_consumed_by_plan(self):
+        from app.domain.entities.memory import Memory
+        from app.domain.value_objects.memory_type import ConfirmationStatus, MemoryType
+        from app.infrastructure.repositories.sqlalchemy_memory_repository import SqlAlchemyMemoryRepository
+        memory_session = self.Session()
+        memory = Memory(
+            user_id="review-user", memory_type=MemoryType.REVIEW_SCHEDULE,
+            course="数据结构与算法", task_type="study", knowledge_point="BFS",
+            content="每2天复习一次", confirmation_status=ConfirmationStatus.CONFIRMED,
+            created_at=datetime.now(timezone.utc) - timedelta(days=3),
+        )
+        SqlAlchemyMemoryRepository(memory_session).add(memory)
+        memory_session.close()
+        llm = _PlanLLM()
+        app.dependency_overrides[get_llm] = lambda: llm
+        try:
+            response = self.client.post("/agent/plan", json={
+                "user_id": "review-user", "course": "数据结构与算法",
+                "goal": "复习BFS", "available_minutes": 25,
+                "task_type": "study", "knowledge_point": "BFS",
+            })
+        finally:
+            app.dependency_overrides.pop(get_llm, None)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(memory.id, response.json()["used_memory_ids"])
+        self.assertIn("复习提醒", response.json()["explanation"])
+        self.assertIn("复习提醒", llm.calls[0]["messages"][1]["content"])
+        check_session = self.Session()
+        refreshed = SqlAlchemyMemoryRepository(check_session).get(memory.id)
+        check_session.close()
+        self.assertIsNotNone(refreshed.last_used_at)
+
+    def test_review_reminder_with_spacing_is_not_duplicated(self):
+        from app.domain.entities.memory import Memory
+        from app.domain.value_objects.memory_type import ConfirmationStatus, MemoryType
+        from app.infrastructure.llm.adapter import LLMResult, ToolCall
+        from app.infrastructure.repositories.sqlalchemy_memory_repository import SqlAlchemyMemoryRepository
+        memory_session = self.Session()
+        memory = Memory(
+            user_id="spaced-review-user", memory_type=MemoryType.REVIEW_SCHEDULE,
+            course="数据结构与算法", task_type="study", knowledge_point="BFS",
+            content="每2天复习一次", confirmation_status=ConfirmationStatus.CONFIRMED,
+            created_at=datetime.now(timezone.utc) - timedelta(days=3),
+        )
+        SqlAlchemyMemoryRepository(memory_session).add(memory)
+        memory_session.close()
+
+        class SpacedReminderLLM(_PlanLLM):
+            def chat(self, messages, *, tools=None, tool_choice="auto", response_format=None):
+                result = super().chat(messages, tools=tools, tool_choice=tool_choice, response_format=response_format)
+                if len(self.calls) == 2:
+                    return LLMResult(
+                        text='{"explanation":"复习提醒：根据你设置的每 2 天复习一次，当前已到复习时间"}',
+                        model=self.model,
+                    )
+                return result
+
+        llm = SpacedReminderLLM()
+        app.dependency_overrides[get_llm] = lambda: llm
+        try:
+            response = self.client.post("/agent/plan", json={
+                "user_id": "spaced-review-user", "course": "数据结构与算法",
+                "goal": "复习BFS", "available_minutes": 25,
+                "task_type": "study", "knowledge_point": "BFS",
+            })
+        finally:
+            app.dependency_overrides.pop(get_llm, None)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["explanation"].count("复习提醒"), 1)
+
+    def test_pending_or_not_due_review_schedule_does_not_change_plan(self):
+        from app.domain.entities.memory import Memory
+        from app.domain.value_objects.memory_type import ConfirmationStatus, MemoryType
+        from app.infrastructure.repositories.sqlalchemy_memory_repository import SqlAlchemyMemoryRepository
+        memory_session = self.Session()
+        memory = Memory(
+            user_id="not-due-review-user", memory_type=MemoryType.REVIEW_SCHEDULE,
+            course="数据结构与算法", task_type="study", knowledge_point="BFS",
+            content="每2天复习一次", confirmation_status=ConfirmationStatus.CONFIRMED,
+            created_at=datetime.now(timezone.utc),
+        )
+        SqlAlchemyMemoryRepository(memory_session).add(memory)
+        memory_session.close()
+        llm = _PlanLLM()
+        app.dependency_overrides[get_llm] = lambda: llm
+        try:
+            response = self.client.post("/agent/plan", json={
+                "user_id": "not-due-review-user", "course": "数据结构与算法",
+                "goal": "复习BFS", "available_minutes": 25,
+                "task_type": "study", "knowledge_point": "BFS",
+            })
+        finally:
+            app.dependency_overrides.pop(get_llm, None)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(memory.id, response.json()["retrieved_memory_ids"])
+        self.assertNotIn(memory.id, response.json()["used_memory_ids"])
+        self.assertNotIn("复习提醒", response.json()["explanation"])
+
+    def test_pending_review_schedule_is_candidate_only(self):
+        from app.domain.entities.memory import Memory
+        from app.domain.value_objects.memory_type import ConfirmationStatus, MemoryType
+        from app.infrastructure.repositories.sqlalchemy_memory_repository import SqlAlchemyMemoryRepository
+        memory_session = self.Session()
+        memory = Memory(
+            user_id="pending-review-user", memory_type=MemoryType.REVIEW_SCHEDULE,
+            course="数据结构与算法", task_type="study", knowledge_point="BFS",
+            content="每2天复习一次", confirmation_status=ConfirmationStatus.PENDING,
+            created_at=datetime.now(timezone.utc) - timedelta(days=3),
+        )
+        SqlAlchemyMemoryRepository(memory_session).add(memory)
+        memory_session.close()
+        llm = _PlanLLM()
+        app.dependency_overrides[get_llm] = lambda: llm
+        try:
+            response = self.client.post("/agent/plan", json={
+                "user_id": "pending-review-user", "course": "数据结构与算法",
+                "goal": "复习BFS", "available_minutes": 25,
+                "task_type": "study", "knowledge_point": "BFS",
+            })
+        finally:
+            app.dependency_overrides.pop(get_llm, None)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(memory.id, response.json()["retrieved_memory_ids"])
+        self.assertIn(memory.id, response.json()["candidate_memory_ids"])
+        self.assertNotIn(memory.id, response.json()["used_memory_ids"])
+        self.assertNotIn("复习提醒", response.json()["explanation"])
 
 
 if __name__ == "__main__":
