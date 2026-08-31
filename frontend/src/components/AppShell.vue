@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '../stores/session'
 import { usePlanStore } from '../stores/plan'
@@ -11,22 +11,28 @@ const route = useRoute()
 const session = useSessionStore()
 const plans = usePlanStore()
 const backendStatus = ref<'checking' | 'online' | 'offline'>('checking')
+let healthCheckTimer: number | undefined
 const nav = [
   { to: '/today', icon: '⌂', label: '弹性任务流' },
   { to: '/study', icon: '◉', label: '理解检验' },
   { to: '/recovery', icon: '✦', label: '思绪星云' },
   { to: '/profile', icon: '◔', label: '个人中心' },
 ]
-const showAside = computed(() => !['/recovery', '/profile'].includes(route.path))
+const showAside = computed(() => !['/recovery', '/profile', '/study/session'].includes(route.path))
 const isStudy = computed(() => route.path === '/study')
-onMounted(async () => {
+async function checkBackend() {
   try {
     const health = await getHealth()
     backendStatus.value = health.status === 'ok' ? 'online' : 'offline'
   } catch {
     backendStatus.value = 'offline'
   }
+}
+onMounted(() => {
+  void checkBackend()
+  healthCheckTimer = window.setInterval(() => void checkBackend(), 5_000)
 })
+onBeforeUnmount(() => window.clearInterval(healthCheckTimer))
 </script>
 
 <template>

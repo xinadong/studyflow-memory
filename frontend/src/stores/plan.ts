@@ -5,6 +5,7 @@ import type { BlockType, PlanResponse, Task, TaskStatus } from '../types'
 const saved = sessionStorage.getItem('studyflow-plan')
 const savedStatuses = sessionStorage.getItem('studyflow-plan-statuses')
 const savedAdjustment = sessionStorage.getItem('studyflow-plan-adjustment')
+const savedReviews = sessionStorage.getItem('studyflow-review-tasks')
 
 export const usePlanStore = defineStore('plan', () => {
   const plan = ref<PlanResponse | null>(saved ? JSON.parse(saved) : null)
@@ -14,12 +15,29 @@ export const usePlanStore = defineStore('plan', () => {
     { id: 'preview-3', course: '数据结构与算法', title: '迁移练习：最短路径建模', description: '可顺延至 21:30', duration_minutes: 20, task_type: 'study', knowledge_point: '最短路径' },
   ])
   const statuses = ref<Record<string, TaskStatus>>(savedStatuses ? JSON.parse(savedStatuses) : {})
+  const reviewTasks = ref<Task[]>(savedReviews ? JSON.parse(savedReviews) : [])
   const localAdjustment = ref(savedAdjustment || '')
+  const sameLocalDay = (left: Date, right: Date) => left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth() && left.getDate() === right.getDate()
+  const misplacedReviews = (plan.value?.tasks ?? []).filter(task => task.task_type === 'review'
+    && task.due_at && !sameLocalDay(new Date(task.due_at), new Date()))
+  if (misplacedReviews.length && plan.value) {
+    const merged = new Map(reviewTasks.value.map(task => [task.id, task]))
+    misplacedReviews.forEach(task => merged.set(task.id, task))
+    reviewTasks.value = [...merged.values()]
+    plan.value.tasks = plan.value.tasks.filter(task => !misplacedReviews.some(review => review.id === task.id))
+    misplacedReviews.forEach(task => { delete statuses.value[task.id] })
+    if (!plan.value.tasks.length) plan.value = null
+    if (plan.value) sessionStorage.setItem('studyflow-plan', JSON.stringify(plan.value))
+    else sessionStorage.removeItem('studyflow-plan')
+    sessionStorage.setItem('studyflow-plan-statuses', JSON.stringify(statuses.value))
+  }
   const totalMinutes = computed(() => plan.value?.tasks.reduce((sum, task) => sum + task.duration_minutes, 0) ?? 0)
   watch(plan, value => value
     ? sessionStorage.setItem('studyflow-plan', JSON.stringify(value))
     : sessionStorage.removeItem('studyflow-plan'), { deep: true })
   watch(statuses, value => sessionStorage.setItem('studyflow-plan-statuses', JSON.stringify(value)), { deep: true })
+  watch(reviewTasks, value => sessionStorage.setItem('studyflow-review-tasks', JSON.stringify(value)), { deep: true, immediate: true })
   watch(localAdjustment, value => value
     ? sessionStorage.setItem('studyflow-plan-adjustment', value)
     : sessionStorage.removeItem('studyflow-plan-adjustment'))
@@ -56,27 +74,28 @@ export const usePlanStore = defineStore('plan', () => {
     delete statuses.value[taskId]
     if (!plan.value.tasks.length) plan.value = null
   }
-  function applyRecoveryAdjustment(blockType: BlockType, taskId: string | undefined, action: string) {
+  function addReviewTask(task: Task, reason: string) {
+    const existing = reviewTasks.value.find(item => item.id === task.id)
+    if (existing) Object.assign(existing, task)
+    else reviewTasks.value.push(task)
+    localAdjustment.value = `伴学反馈已影响计划：已将「${task.knowledge_point}」复习加入 ${new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(task.due_at!))}。${reason}`
+  }
+  function applyRecoveryAdjustment(blockType: BlockType, taskId: string | undefined, action: string, adjustedRemainingMinutes?: number) {
     const tasks = plan.value?.tasks ?? previewTasks.value
-    const currentIndex = Math.max(0, tasks.findIndex(task => task.id === taskId))
+    const currentIndex = tasks.findIndex(task => task.id === taskId)
+    if (currentIndex < 0) return ''
     const current = tasks[currentIndex]
     if (!current) return ''
 
     if (blockType === 'too_hard') {
-      const helper: Task = {
-        id: `recovery-step-${Date.now()}`,
-        course: current.course,
-        title: `${current.knowledge_point || current.title} · 基础回顾`,
-        description: '根据“学不会”反馈新增的低难度起步任务',
-        duration_minutes: 10,
-        task_type: current.task_type,
-        knowledge_point: current.knowledge_point,
-        due_at: current.due_at,
-      }
-      tasks.splice(currentIndex, 0, helper)
-      statuses.value[helper.id] = 'active'
-      statuses.value[current.id] = 'deferred'
-      localAdjustment.value = `检测到“学不会”：已先加入 10 分钟基础回顾，并将「${current.title}」顺延。${action}`
+      const previousMinutes = current.duration_minutes
+      current.duration_minutes = Math.min(120, adjustedRemainingMinutes ?? previousMinutes + 10)
+      current.description = '根据“学不会”反馈，在释放杂念时的剩余时间上增加 10 分钟'
+      statuses.value[current.id] = 'active'
+      localAdjustment.value = `检测到“学不会/好难”：保留当前任务，并在释放杂念时的剩余时间基础上增加 10 分钟；现在剩余约 ${current.duration_minutes} 分钟。${action}`
+    } else if (blockType === 'distraction') {
+      statuses.value[current.id] = 'active'
+      localAdjustment.value = `已记录与任务无关的杂念，未改变「${current.title}」的时长和顺序；返回后可从原倒计时继续。${action}`
     } else {
       const previousMinutes = current.duration_minutes
       const nextMinutes = blockType === 'time' ? Math.max(10, Math.min(15, previousMinutes)) : Math.max(10, Math.min(15, previousMinutes))
@@ -94,5 +113,5 @@ export const usePlanStore = defineStore('plan', () => {
     }
     return localAdjustment.value
   }
-  return { plan, previewTasks, statuses, localAdjustment, totalMinutes, setPlan, addImportedTasks, removeTask, applyRecoveryAdjustment }
+  return { plan, previewTasks, reviewTasks, statuses, localAdjustment, totalMinutes, setPlan, addImportedTasks, addReviewTask, removeTask, applyRecoveryAdjustment }
 })

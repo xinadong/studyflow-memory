@@ -8,10 +8,11 @@ const router = useRouter()
 const session = useSessionStore()
 const plans = usePlanStore()
 const task = computed(() => session.selectedTask)
-const remainingSeconds = ref(Math.max(1, task.value?.duration_minutes || 25) * 60)
+const resumableSeconds = task.value && session.focusTaskId === task.value.id ? session.focusRemainingSeconds : null
+const remainingSeconds = ref(resumableSeconds ?? Math.max(1, task.value?.duration_minutes || 25) * 60)
 const running = ref(true)
 const showMoreTime = ref(false)
-const extraMinutes = ref(10)
+const extraMinutes = ref<number | null>(null)
 const timeError = ref('')
 let timer: number | undefined
 
@@ -27,6 +28,7 @@ const progress = computed(() => {
 
 function tick() {
   if (running.value && remainingSeconds.value > 0) remainingSeconds.value -= 1
+  if (task.value) session.setFocusProgress(task.value.id, remainingSeconds.value)
   if (remainingSeconds.value === 0) running.value = false
 }
 function openMoreTime() {
@@ -35,11 +37,17 @@ function openMoreTime() {
   timeError.value = ''
 }
 function continueLearning() {
-  if (!Number.isFinite(extraMinutes.value) || extraMinutes.value < 1 || extraMinutes.value > 240) {
+  if (extraMinutes.value === null || !Number.isFinite(extraMinutes.value) || extraMinutes.value < 1 || extraMinutes.value > 240) {
     timeError.value = '请输入 1–240 分钟。'
     return
   }
-  remainingSeconds.value = Math.round(extraMinutes.value) * 60
+  const addedMinutes = Math.round(extraMinutes.value)
+  remainingSeconds.value += addedMinutes * 60
+  if (task.value) {
+    task.value.duration_minutes = Math.ceil(remainingSeconds.value / 60)
+    session.setFocusProgress(task.value.id, remainingSeconds.value)
+    plans.localAdjustment = `检测到“时间不够”：已在当时剩余时间的基础上增加 ${addedMinutes} 分钟，当前剩余 ${timeText.value}。`
+  }
   showMoreTime.value = false
   running.value = true
 }
@@ -49,10 +57,12 @@ function closeMoreTime() {
 }
 function finishEarly() {
   if (task.value) plans.statuses[task.value.id] = 'completed'
+  session.clearFocusProgress()
   session.selectedTask = null
   router.push('/today')
 }
 function releaseThought() {
+  if (task.value) session.setFocusProgress(task.value.id, remainingSeconds.value)
   sessionStorage.setItem('studyflow-block', 'distraction')
   router.push('/recovery')
 }
@@ -63,8 +73,12 @@ onMounted(() => {
     return
   }
   timer = window.setInterval(tick, 1000)
+  session.setFocusProgress(task.value.id, remainingSeconds.value)
 })
-onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
+onBeforeUnmount(() => {
+  if (timer !== undefined) window.clearInterval(timer)
+  if (task.value) session.setFocusProgress(task.value.id, remainingSeconds.value)
+})
 </script>
 
 <template>
@@ -73,7 +87,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
     <article class="timer-card" :class="{ finished: remainingSeconds === 0 }">
       <div class="timer-orbit"><div class="timer-core"><small>{{ remainingSeconds === 0 ? '本轮时间已到' : '专注倒计时' }}</small><strong>{{ timeText }}</strong><span>{{ running ? '保持当前节奏' : '计时已暂停' }}</span></div></div>
       <div class="progress-track"><i :style="{ width: `${progress}%` }" /></div>
-      <p>任务预计 {{ task.duration_minutes }} 分钟 · 离开此页将结束本轮计时</p>
+      <p>任务预计 {{ task.duration_minutes }} 分钟 · 离开此页会暂停并保留当前倒计时</p>
       <div class="focus-actions">
         <button type="button" class="more-time" @click="openMoreTime">时间不够</button>
         <button type="button" class="finish-early" @click="finishEarly">提前完成</button>
@@ -84,11 +98,11 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
     <div v-if="showMoreTime" class="time-backdrop" @click.self="closeMoreTime">
       <form class="time-dialog" role="dialog" aria-modal="true" aria-labelledby="more-time-title" @submit.prevent="continueLearning">
         <button type="button" class="dialog-close" aria-label="关闭" @click="closeMoreTime">×</button>
-        <span>调整本轮时间</span><h2 id="more-time-title">预计还需要多少分钟？</h2>
-        <p>填写后将以新的时长继续倒计时，不会中断当前任务。</p>
-        <label><input v-model.number="extraMinutes" type="number" min="1" max="240" step="1" autofocus /><b>分钟</b></label>
+        <span>追加本轮时间</span><h2 id="more-time-title">希望增加多少分钟？</h2>
+        <p>填写的分钟数会加在当前剩余时间上，不会重置已经完成的倒计时。</p>
+        <label><input v-model.number="extraMinutes" type="number" min="1" max="240" step="1" placeholder="例如：10" autofocus /><b>分钟</b></label>
         <p v-if="timeError" class="time-error" role="alert">{{ timeError }}</p>
-        <div class="dialog-actions"><button type="button" @click="closeMoreTime">取消</button><button class="continue-button">继续学习</button></div>
+        <div class="dialog-actions"><button type="button" @click="closeMoreTime">取消</button><button class="continue-button">增加并继续</button></div>
       </form>
     </div>
   </section>

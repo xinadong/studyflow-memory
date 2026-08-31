@@ -24,6 +24,10 @@ app.add_middleware(
         "http://localhost:4173",
         "http://127.0.0.1:4173",
     ],
+    # Vite falls back to the next free port (for example 5174) when 5173 is
+    # already occupied. Keep local development usable without opening CORS to
+    # non-local origins.
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -15,7 +15,7 @@ import type { BlockType, RecoveryResponse } from '../types'
 const session = useSessionStore()
 const plans = usePlanStore()
 const block = ref<BlockType>((sessionStorage.getItem('studyflow-block') as BlockType) || 'time')
-const context = ref(session.selectedTask ? `当前任务：${session.selectedTask.title}` : '')
+const context = ref('')
 const result = ref<RecoveryResponse | null>(null)
 const busy = ref(false)
 const error = ref('')
@@ -86,7 +86,7 @@ function startLaunch() {
 }
 
 function inferBlockType(value: string): BlockType {
-  if (/学不会|不会做|太难|看不懂|跟不上/.test(value)) return 'too_hard'
+  if (/学不会|不会做|不会|太难|好难|很难|看不懂|搞不懂|听不懂|跟不上|没思路/.test(value)) return 'too_hard'
   if (/时间不够|来不及|没时间|赶不完/.test(value)) return 'time'
   if (/累|疲惫|困|没精神/.test(value)) return 'fatigue'
   return 'distraction'
@@ -98,6 +98,9 @@ async function recover(acceptance?: boolean) {
     block.value = inferBlockType(submittedContext)
     sessionStorage.setItem('studyflow-block', block.value)
     startLaunch()
+    if (block.value === 'too_hard' && session.selectedTask && !applied.value) {
+      applyPlanAdjustment('已根据你发射的“学不会/好难”信号，先降低起步难度并补充学习时间。')
+    }
   }
   busy.value = true
   error.value = ''
@@ -119,13 +122,27 @@ async function recover(acceptance?: boolean) {
 }
 
 function apply() {
+  applyPlanAdjustment(result.value?.action || '')
+  recover(true)
+}
+
+function applyPlanAdjustment(action: string) {
   applied.value = true
+  let adjustedRemainingMinutes: number | undefined
+  if (block.value === 'too_hard' && session.selectedTask) {
+    const baseSeconds = session.focusTaskId === session.selectedTask.id && session.focusRemainingSeconds !== null
+      ? session.focusRemainingSeconds
+      : session.selectedTask.duration_minutes * 60
+    const nextSeconds = baseSeconds + 10 * 60
+    session.setFocusProgress(session.selectedTask.id, nextSeconds)
+    adjustedRemainingMinutes = Math.ceil(nextSeconds / 60)
+  }
   appliedSummary.value = plans.applyRecoveryAdjustment(
     block.value,
     session.selectedTask?.id,
-    result.value?.action || '',
+    action,
+    adjustedRemainingMinutes,
   )
-  recover(true)
 }
 
 function reject() {
@@ -189,10 +206,11 @@ onBeforeUnmount(() => {
 
     <form class="launch-composer" @submit.prevent="recover()">
       <div><h2>{{ launched ? '已发射至星空' : '发射此刻心情' }}</h2><p>当前支持文字输入；语音能力待接入</p></div>
+      <div v-if="session.selectedTask" class="current-task-context"><span>当前任务</span><b>{{ session.selectedTask.title }}</b><small>{{ session.selectedTask.duration_minutes }} 分钟</small></div>
       <div class="thought-input">
         <label class="sr-only" for="thought-context">输入此刻的思绪</label>
-        <input id="thought-context" v-model.trim="context" type="text" placeholder="输入此刻的思绪…" :disabled="busy">
-        <button class="launch-button" type="submit" :disabled="busy" aria-label="发射此刻心情"><img :src="sendIcon" alt=""></button>
+        <input id="thought-context" v-model.trim="context" type="text" placeholder="输入此刻的思绪…" :disabled="busy" autofocus>
+        <button class="launch-button" type="submit" :disabled="busy || !context.trim()" aria-label="发射此刻心情"><img :src="sendIcon" alt=""></button>
         <span class="input-divider" aria-hidden="true" />
         <button class="voice-button" type="button" disabled title="语音输入暂未接入" aria-label="语音输入暂未接入"><img :src="voiceIcon" alt=""></button>
       </div>
@@ -219,6 +237,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .thought-page{position:relative;min-height:100vh;margin:-40px 0 -70px -36px;overflow:hidden;color:white;background:#0b1838 var(--nebula-background) center/cover no-repeat;isolation:isolate}.cosmic-veil{position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,rgba(11,24,56,.74),rgba(58,96,160,.04) 42%,rgba(11,24,56,.54)),linear-gradient(180deg,transparent 58%,rgba(11,24,56,.9))}.thought-intro{position:absolute;top:58px;left:46px}.thought-eyebrow{margin-bottom:18px;color:#c8ddf5;font-size:11px;font-weight:800;letter-spacing:.06em}.thought-intro h1{margin:0 0 12px;font-size:clamp(29px,3vw,38px);line-height:1.2}.thought-intro>p:last-child{color:#c8ddf5;font-size:14px;line-height:1.75}.privacy-status{position:absolute;top:66px;right:40px;padding:11px 27px;border:1px solid rgba(200,221,245,.26);border-radius:999px;background:rgba(11,24,56,.38);color:#c8ddf5;font-size:11px;backdrop-filter:blur(18px)}
 .launch-composer{position:absolute;right:40px;bottom:66px;left:46px;display:grid;gap:10px;padding:22px 28px 20px;border:1.25px solid rgba(200,221,245,.62);border-radius:30px;background:rgba(200,221,245,.16);box-shadow:0 20px 44px rgba(11,24,56,.42);backdrop-filter:blur(28px)}.launch-composer h2{margin:0;font-size:24px}.launch-composer p{margin:4px 0 0;color:#c8ddf5;font-size:11px}.launch-composer>small{color:#c8ddf5;font-size:10px}.thought-input{display:grid;grid-template-columns:minmax(0,1fr) 44px 1px 44px;align-items:center;min-height:58px;overflow:hidden;border:1px solid rgba(255,255,255,.7);border-radius:19px;background:rgba(200,221,245,.72);box-shadow:inset 2px 3px 6px rgba(58,96,160,.24)}.thought-input input{width:100%;height:56px;padding:0 18px;border:0;outline:0;color:#0b1838;background:transparent}.thought-input input::placeholder{color:rgba(11,24,56,.72)}.thought-input button{width:44px;height:44px;padding:12px;border:0;background:transparent}.thought-input button:not(:disabled):hover{filter:brightness(1.18);transform:scale(1.06)}.thought-input button img{display:block;width:20px;height:20px}.voice-button:disabled{cursor:default;opacity:.75}.input-divider{width:1px;height:28px;background:rgba(58,96,160,.44)}
+.current-task-context{padding:8px 12px;display:flex;align-items:center;gap:9px;border:1px solid rgba(200,221,245,.28);border-radius:13px;background:rgba(11,24,56,.25);color:#eaf3ff;font-size:10px}.current-task-context span{padding:4px 7px;border-radius:8px;background:rgba(200,221,245,.17);color:#c8ddf5}.current-task-context b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.current-task-context small{margin-left:auto;color:#c8ddf5;white-space:nowrap}
 .launch-scene{position:absolute;inset:126px 34px 255px 40px;pointer-events:none}.launch-svg{width:100%;height:100%;overflow:visible}.trail-core,.trail-glow{fill:none;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;animation:draw-trail var(--launch-duration) cubic-bezier(.2,.65,.28,1) forwards,fade-trail .45s var(--trail-fade-delay) ease-out forwards}.trail-core{stroke:url(#trail-gradient);stroke-width:2.2;vector-effect:non-scaling-stroke}.trail-glow{stroke:#88a5e0;stroke-width:9;opacity:.5;filter:blur(7px);vector-effect:non-scaling-stroke}.moving-star{animation:star-arrive var(--launch-duration) cubic-bezier(.2,.65,.28,1) both,fade-star .45s var(--trail-fade-delay) ease-out forwards}.recovery-output{margin:96px 0 40px}.impact h2{margin:4px 0 18px}
 .applied-plan{display:flex;align-items:center;justify-content:space-between;gap:24px;border-color:#bfe9dc;background:linear-gradient(110deg,#ecfaf5,#eef4ff)}.applied-plan h2{margin:4px 0 8px}.applied-plan p:not(.eyebrow){margin:0;color:#3f5277;line-height:1.65}.applied-plan small{display:block;margin-top:8px;color:#7b88aa}.applied-plan a{text-decoration:none;white-space:nowrap}
 @keyframes draw-trail{0%{stroke-dashoffset:1;opacity:0}8%{opacity:1}100%{stroke-dashoffset:0;opacity:1}}@keyframes fade-trail{to{opacity:0}}@keyframes star-arrive{0%{opacity:.15}20%{opacity:1}100%{opacity:1}}@keyframes fade-star{to{opacity:0}}@media(prefers-reduced-motion:reduce){.trail-core,.trail-glow,.moving-star{animation-duration:.01ms!important;animation-delay:0s!important}}

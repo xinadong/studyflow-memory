@@ -14,7 +14,7 @@ const session=useSessionStore(), memories=useMemoryStore()
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 const busy=ref(false), saving=ref(false), error=ref(''), success=ref('')
 const filters=reactive<{course:string;memory_type:MemoryType|'';confirmation_status:ConfirmationStatus|''}>({course:'',memory_type:'',confirmation_status:''})
-const feedback=reactive<{content:string;feedback_type:MemoryType|'';explicit:boolean}>({content:'我希望每个学习任务控制在 15 分钟以内',feedback_type:'task_preference',explicit:true})
+const feedback=reactive<{content:string;feedback_type:MemoryType|'';explicit:boolean}>({content:'',feedback_type:'',explicit:false})
 
 async function load(){busy.value=true;error.value='';try{const data=await listMemories({user_id:session.userId,course:filters.course||undefined,memory_type:filters.memory_type,confirmation_status:filters.confirmation_status,active:true});memories.items=data.items}catch(e){error.value=errorMessage(e)}finally{busy.value=false}}
 async function submit(){saving.value=true;error.value='';success.value='';try{const data=await submitFeedback({user_id:session.userId,course:session.course,content:feedback.content,...(feedback.feedback_type?{feedback_type:feedback.feedback_type}:{}),...(feedback.feedback_type?{explicit:feedback.explicit}:{}),task_type:'study',knowledge_point:session.knowledgePoint||undefined});success.value=`反馈已转为 ${data.memories[0]?.confirmation_status==='confirmed'?'已确认':'待确认'}记忆`;feedback.content='';await load()}catch(e){error.value=errorMessage(e)}finally{saving.value=false}}

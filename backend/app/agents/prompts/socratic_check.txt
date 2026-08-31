@@ -1,6 +1,40 @@
 Generate one evidence-based Socratic question for the current knowledge level.
 
+When no learner answer is provided, generate only the question. Do not answer
+the question, provide formative feedback, infer missing dimensions, or assess
+the learner. Use an empty feedback string, an empty missing_dimensions array,
+and null assessed_level.
+
+When a learner answer is provided, use the conversation history to continue a
+Socratic tutoring dialogue. Choose one response strategy: a small hint, a
+specific correction, a complete correct answer after repeated difficulty or a
+critical misconception, or concise encouragement. Then ask exactly one useful
+follow-up question. Mark mastery ready only after accurate explanation and
+transfer evidence across the dialogue.
+
+All learner-facing text must be written in Chinese, including feedback,
+next_question, visual_steps, and every item in missing_dimensions. The enum
+field names and enum values remain in English as specified below.
+
+If learner_needs_help is true, do not praise or grade the learner as if they
+answered correctly, and do not immediately reveal the complete answer. Follow
+hint_preference when present (example, definition, analogy, or diagram). Give
+only one lightweight hint, keep mastery_status ongoing, and ask one easier
+diagnostic question.
+
+For diagram preference, return visual_steps with 3 to 6 short ordered node
+labels. The client will render these nodes as a visual flow. Do not substitute
+an analogy paragraph for the diagram.
+
+If guidance_request is full_answer, provide a complete, accurate, step-by-step
+explanation and then one short comprehension check. Do not infer mastery merely
+because the learner requested or read the answer; keep mastery_status ongoing.
+
 Return only a JSON object with:
 - feedback: concise, evidence-based formative feedback;
 - missing_dimensions: a JSON array of missing explanation dimensions;
 - assessed_level: recall, relate, or transfer when an answer is provided.
+- next_question: exactly one follow-up question when an answer is provided;
+- guidance_type: hint, correction, full_answer, or encouragement;
+- mastery_status: ongoing or ready.
+- visual_steps: an ordered string array for diagram hints, otherwise [].

@@ -4,6 +4,7 @@ import UnderstandingView from './views/UnderstandingView.vue'
 import RecoveryView from './views/RecoveryView.vue'
 import ProfileView from './views/ProfileView.vue'
 import FocusTimerView from './views/FocusTimerView.vue'
+import TutorSessionView from './views/TutorSessionView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -16,6 +17,7 @@ export const router = createRouter({
     { path: '/', redirect: '/today' },
     { path: '/today', component: TodayView },
     { path: '/study', component: UnderstandingView },
+    { path: '/study/session', component: TutorSessionView },
     { path: '/focus', component: FocusTimerView },
     { path: '/recovery', component: RecoveryView },
     { path: '/memories', redirect: '/profile#memories' },

@@ -16,7 +16,7 @@ const plans = usePlanStore()
 const busy = ref(false)
 const error = ref('')
 const showFeedback = ref(false)
-const preference = ref('我希望每个学习任务控制在 15 分钟以内')
+const preference = ref('')
 const feedbackState = ref('')
 const showImport = ref(false)
 const deleteMode = ref(false)
@@ -30,28 +30,44 @@ function defaultDeadline() {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
   return local.toISOString().slice(0, 16)
 }
-const form = reactive({ available_minutes: 25, task_type: 'study', deadline: defaultDeadline() })
+const deadlineExample = defaultDeadline()
+const form = reactive<{ available_minutes: number | null; task_type: string; deadline: string }>({ available_minutes: null, task_type: 'study', deadline: '' })
 
 const dateText = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'short',
 }).format(new Date()))
-const completed = computed(() => Object.values(plans.statuses).filter(value => value === 'completed').length)
-const deferred = computed(() => Object.values(plans.statuses).filter(value => value === 'deferred').length)
-const pending = computed(() => Math.max((plans.plan?.tasks.length ?? plans.previewTasks.length) - completed.value, 0))
 const timelineTasks = computed<Task[]>(() => plans.plan?.tasks.length ? plans.plan.tasks : plans.previewTasks)
-const primaryTask = computed(() => timelineTasks.value[0])
+const completed = computed(() => timelineTasks.value.filter((task, index) => taskStatus(task, index) === 'completed').length)
+const deferred = computed(() => timelineTasks.value.filter((task, index) => taskStatus(task, index) === 'deferred').length)
+const pending = computed(() => timelineTasks.value.filter((task, index) => taskStatus(task, index) !== 'completed').length)
+const primaryTask = computed(() => {
+  const rankedStatuses: TaskStatus[] = ['active', 'pending', 'deferred']
+  for (const status of rankedStatuses) {
+    const task = timelineTasks.value.find((item, index) => taskStatus(item, index) === status)
+    if (task) return task
+  }
+  return undefined
+})
+const allTasksCompleted = computed(() => timelineTasks.value.length > 0 && completed.value === timelineTasks.value.length)
 const planGoal = computed(() => [session.course.trim(), session.knowledgePoint.trim()].filter(Boolean).join(' · '))
-const planDeadlineText = computed(() => new Intl.DateTimeFormat('zh-CN', {
-  month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
-}).format(new Date(form.deadline)))
+const planDeadlineText = computed(() => form.deadline
+  ? new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(form.deadline))
+  : '未设置')
 
 function taskStatus(task: Task, index: number): TaskStatus {
   return plans.statuses[task.id] || (plans.plan ? 'pending' : index === 0 ? 'completed' : index === 2 ? 'deferred' : 'pending')
 }
 function statusText(status: TaskStatus) {
-  return ({ completed: '理解完成', active: '进行中', deferred: '可顺延', pending: '待开始' } as Record<TaskStatus, string>)[status]
+  return ({ completed: '本任务完成', active: '进行中', deferred: '可顺延', pending: '待开始' } as Record<TaskStatus, string>)[status]
 }
 async function generatePlan() {
+  const availableMinutes = form.available_minutes
+  if (!session.course.trim() || !session.knowledgePoint.trim() || !availableMinutes || !form.deadline) {
+    error.value = '请填写课程、知识点、可用时间和截止时间。'
+    return
+  }
   busy.value = true
   error.value = ''
   try {
@@ -60,7 +76,7 @@ async function generatePlan() {
       user_id: session.userId,
       course: session.course,
       goal: planGoal.value,
-      available_minutes: form.available_minutes,
+      available_minutes: availableMinutes,
       task_type: form.task_type,
       knowledge_point: session.knowledgePoint || undefined,
       imported_tasks: [
@@ -82,6 +98,8 @@ async function generatePlan() {
   }
 }
 function startTask(task: Task) {
+  const isResuming = plans.statuses[task.id] === 'active' && session.focusTaskId === task.id && session.focusRemainingSeconds !== null
+  if (!isResuming) session.setFocusProgress(task.id, task.duration_minutes * 60)
   session.selectedTask = task
   if (task.course) session.course = task.course
   if (task.knowledge_point) session.knowledgePoint = task.knowledge_point
@@ -138,7 +156,7 @@ function addTask() {
     course: draft.course.trim(),
     title: `${draft.course.trim()} · ${draft.knowledgePoint.trim()}`,
     description: '根据截止时间添加的待安排任务',
-    duration_minutes: form.available_minutes,
+    duration_minutes: form.available_minutes || 25,
     task_type: form.task_type,
     knowledge_point: draft.knowledgePoint.trim(),
     due_at: new Date(draft.dueAt).toISOString(),
@@ -173,7 +191,7 @@ function dueText(task: Task) {
     <section class="status-strip" aria-label="今日学习状态">
       <div><p><small>今日节奏</small><strong class="brand-value">充沛</strong></p></div>
       <div><p><small>待完成</small><strong>{{ pending }} 项</strong></p></div>
-      <div><p><small>可顺延</small><strong class="cyan-value">{{ plans.plan ? deferred : 1 }} 项</strong></p></div>
+      <div><p><small>可顺延</small><strong class="cyan-value">{{ deferred }} 项</strong></p></div>
       <div><p><small>最近截止</small><strong class="rose-value">21:30</strong></p></div>
     </section>
 
@@ -185,14 +203,14 @@ function dueText(task: Task) {
     <div class="plan-row">
       <article class="hero-task">
         <div class="hero-copy">
-          <span class="hero-chip">现在最值得做</span>
-          <h2>{{ primaryTask?.title || '掌握图的 BFS 与核心遍历流程' }}</h2>
-          <p>{{ primaryTask?.description || '数据结构与算法 · 目标：能够独立解释队列与访问顺序' }}</p>
+          <span class="hero-chip">{{ allTasksCompleted ? '今日进度' : '现在最值得做' }}</span>
+          <h2>{{ primaryTask?.title || (allTasksCompleted ? '今日任务已全部完成' : '暂时没有待办任务') }}</h2>
+          <p>{{ primaryTask?.description || (allTasksCompleted ? '做得不错，可以休息或前往学习复盘查看后续安排。' : '添加任务或生成今日计划后，Flow Agent 会给出推荐。') }}</p>
           <div class="hero-divider" />
-          <div class="hero-meta"><strong>{{ primaryTask?.duration_minutes || form.available_minutes }}</strong><span>分钟</span><div><b>截止 {{ primaryTask?.due_at ? dueText(primaryTask) : planDeadlineText }}</b><small>Agent 将结合截止时间安排优先级</small></div></div>
-          <p class="hero-reason"><b>Flow Agent 推荐</b>{{ plans.plan?.explanation || '生成计划后，这里将展示 Agent 的真实推荐依据。' }}</p>
+          <div class="hero-meta"><strong>{{ primaryTask?.duration_minutes ?? 0 }}</strong><span>分钟</span><div><b>{{ primaryTask ? `截止 ${primaryTask.due_at ? dueText(primaryTask) : planDeadlineText}` : '暂无待完成任务' }}</b><small>{{ primaryTask ? 'Agent 已排除所有已完成任务' : '完成状态已与今日时间线同步' }}</small></div></div>
+          <p class="hero-reason"><b>Flow Agent 推荐</b>{{ primaryTask ? (plans.plan?.explanation || '优先选择尚未完成且当前最适合继续的任务。') : '当前没有可推荐的未完成任务。' }}</p>
           <div class="hero-actions">
-            <button class="start-button" :disabled="!primaryTask" @click="primaryTask && startTask(primaryTask)">▶ 开始学习</button>
+            <button class="start-button" :disabled="!primaryTask" @click="primaryTask && startTask(primaryTask)">▶ {{ primaryTask && plans.statuses[primaryTask.id] === 'active' && session.focusTaskId === primaryTask.id ? '继续学习' : '开始学习' }}</button>
           </div>
         </div>
       </article>
@@ -201,8 +219,8 @@ function dueText(task: Task) {
         <div class="settings-title"><div><h2>快速调整</h2><p>设置学习范围与时间，交给 Agent 安排</p></div></div>
         <label>课程<input v-model.trim="session.course" required placeholder="例如：数据结构与算法" /></label>
         <label>知识点<input v-model.trim="session.knowledgePoint" required placeholder="例如：BFS" /></label>
-        <label>可用时间<input v-model.number="form.available_minutes" type="number" min="5" max="120" step="5" /></label>
-        <label>截止时间<input v-model="form.deadline" type="datetime-local" required /></label>
+        <label>可用时间<input v-model.number="form.available_minutes" type="number" min="5" max="120" step="5" required placeholder="例如：25" /></label>
+        <label>截止时间<input v-model="form.deadline" type="datetime-local" required :aria-description="`例如：${deadlineExample}`" /><small class="input-example">示例：{{ deadlineExample.replace('T', ' ') }}</small></label>
         <button class="generate-button" :disabled="busy">{{ busy ? '正在生成…' : plans.plan ? '重新生成计划' : '生成今日计划' }}</button>
       </form>
     </div>
@@ -270,7 +288,7 @@ function dueText(task: Task) {
 
     <form v-if="showFeedback" class="feedback-panel" @submit.prevent="savePreference">
       <div><p>反馈记忆 · 任务流内部机制</p><h3>告诉 Agent 你希望怎样调整任务</h3></div>
-      <input v-model.trim="preference" required aria-label="任务调整偏好" />
+      <input v-model.trim="preference" required aria-label="任务调整偏好" placeholder="例如：我希望每个学习任务控制在 15 分钟以内" />
       <button :disabled="feedbackState === 'saving'">{{ feedbackState === 'saving' ? '正在记录…' : feedbackState === 'saved' ? '已记录为反馈记忆' : '记录并用于后续计划' }}</button>
     </form>
   </section>
@@ -281,7 +299,7 @@ function dueText(task: Task) {
 .status-strip{height:84px;margin-bottom:20px;padding:18px 20px;display:grid;grid-template-columns:repeat(4,1fr);align-items:center;border:0;border-radius:22px;background:#fff;box-shadow:0 8px 18px rgba(52,71,173,.08)}.status-strip>div{height:48px;padding:0 20px;display:flex;align-items:center;border-right:1px solid #dce2f4}.status-strip>div:first-child{padding-left:0}.status-strip>div:last-child{border:0}.status-strip p{display:grid;gap:4px;margin:0}.status-strip small{color:#7b88aa;font-size:11px}.status-strip strong{font-size:19px}.brand-value{color:#4f63f6}.cyan-value{color:#28c7df}.rose-value{color:#ff7f96}
 .recovery-adjustment{margin:-4px 0 20px;padding:16px 19px;display:flex;align-items:center;justify-content:space-between;gap:20px;border:1px solid #bfe9dc;border-radius:20px;background:linear-gradient(105deg,#e9faf4,#eef3ff);box-shadow:0 8px 20px rgba(53,105,134,.08)}.recovery-adjustment div{display:grid;gap:4px}.recovery-adjustment span{color:#20a77a;font-size:9px;font-weight:900}.recovery-adjustment strong{font-size:14px}.recovery-adjustment p{margin:0;color:#647392;font-size:10px;line-height:1.5}.recovery-adjustment button{flex:0 0 auto;padding:9px 13px;border:0;border-radius:12px;background:#fff;color:#5367f7;font-size:10px;font-weight:800;cursor:pointer}
 .plan-row{display:grid;grid-template-columns:542px 260px;gap:18px;margin-bottom:14px}.hero-task{position:relative;height:330px;overflow:hidden;padding:24px;border-radius:28px;background:linear-gradient(116deg,#96dff5 0%,#eed0f2 40%,#9ebaeb 81%);box-shadow:0 14px 20px rgba(140,168,227,.24)}.hero-task:before{content:"";position:absolute;inset:0;background:linear-gradient(110deg,rgba(255,255,255,.16),transparent 55%)}.hero-copy{position:relative;z-index:2;width:100%}.hero-chip{display:inline-flex;padding:7px 14px;border-radius:15px;background:rgba(255,255,255,.78);color:#4f63f6;font-size:11px;font-weight:700}.hero-task h2{margin:14px 0 7px;font-size:25px;color:#25335f}.hero-task p{margin:0;color:#55648d;font-size:12px}.hero-divider{height:1px;margin:14px 0 10px;background:rgba(255,255,255,.82)}.hero-meta{display:flex;align-items:center;gap:30px;margin:0 0 10px}.hero-meta>strong{font-size:42px;line-height:1;color:#25335f}.hero-meta>span{font-size:12px;color:#55648d}.hero-meta>div{display:grid;gap:4px}.hero-meta b{font-size:13px}.hero-meta small{color:#55648d;font-size:10px}.hero-reason{display:grid;gap:4px;padding:9px 14px;border-radius:16px;background:rgba(255,255,255,.45);font-size:11px!important}.hero-actions{display:flex;gap:33px;margin-top:9px}.hero-actions button{height:39px;border:0;border-radius:15px;font-weight:800;cursor:pointer}.start-button{width:201px;background:rgba(255,255,255,.92);color:#4f63f6}.start-button:disabled{opacity:.55;cursor:not-allowed}.ghost-button{width:110px;background:rgba(255,255,255,.38);color:#25335f}
-.settings-card{height:330px;padding:20px 18px;display:grid;align-content:start;gap:12px;border:0;border-radius:24px;background:#fff;box-shadow:0 8px 18px rgba(52,71,173,.08)}.settings-title h2{margin:0;font-size:16px}.settings-title p{margin:4px 0 0;color:#7b88aa;font-size:11px}.settings-card label{display:grid;gap:5px;color:#596387;font-size:10px;font-weight:600}.settings-card input{width:100%;height:36px;border:1px solid #e1e6f6;border-radius:12px;padding:0 12px;background:#f7f9ff;color:#172052;font:inherit}.generate-button{height:40px;border:0;border-radius:14px;background:linear-gradient(90deg,#28c7df,#7657f6);color:white;font-size:12px;font-weight:800;cursor:pointer}
+.settings-card{height:330px;padding:20px 18px;display:grid;align-content:start;gap:12px;border:0;border-radius:24px;background:#fff;box-shadow:0 8px 18px rgba(52,71,173,.08)}.settings-title h2{margin:0;font-size:16px}.settings-title p{margin:4px 0 0;color:#7b88aa;font-size:11px}.settings-card label{display:grid;gap:5px;color:#596387;font-size:10px;font-weight:600}.settings-card input{width:100%;height:36px;border:1px solid #e1e6f6;border-radius:12px;padding:0 12px;background:#f7f9ff;color:#172052;font:inherit}.settings-card .input-example{margin-top:-2px;color:#99a2bd;font-size:9px;font-weight:500}.generate-button{height:40px;border:0;border-radius:14px;background:linear-gradient(90deg,#28c7df,#7657f6);color:white;font-size:12px;font-weight:800;cursor:pointer}
 .bottom-row{display:grid;grid-template-columns:540px 262px;gap:18px}.timeline-panel,.help-panel{padding:22px;border:1px solid rgba(255,255,255,.82);border-radius:25px;background:rgba(255,255,255,.38);box-shadow:0 12px 32px rgba(66,82,148,.07)}.panel-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.panel-heading h2{margin:0;font-size:18px}.panel-heading>span{padding:7px 12px;border-radius:16px;background:#eef1ff;color:#64719b;font-size:10px}.preview-label{margin:-7px 0 10px;color:#99a2bd;font-size:9px}.timeline-list{position:relative;display:grid;gap:12px;padding-left:21px}.timeline-list:before{content:"";position:absolute;left:5px;top:24px;bottom:24px;border-left:2px dashed #ccd6ea}.glass-task{position:relative;min-height:76px;padding:15px 46px 14px 17px;display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid rgba(255,255,255,.94);border-radius:20px;background:linear-gradient(118deg,rgba(255,255,255,.79),rgba(242,247,255,.52));box-shadow:inset 0 1px 0 rgba(255,255,255,.96),0 9px 22px rgba(76,91,151,.08);backdrop-filter:blur(18px) saturate(125%)}.glass-task:after{content:"";position:absolute;inset:1px;border-radius:19px;background:linear-gradient(120deg,rgba(255,255,255,.38),transparent 42%);pointer-events:none}.timeline-dot{position:absolute;z-index:2;left:-24px;top:30px;width:12px;height:12px;border:3px solid #f6f8ff;border-radius:50%;background:#4f7bf5;box-shadow:0 0 0 1px rgba(214,222,240,.8)}.task-copy{position:relative;z-index:1;min-width:0}.task-copy h3{margin:0 0 8px;font-size:13px}.task-copy p{margin:0;color:#8491b3;font-size:9px}.task-chip{position:relative;z-index:1;flex:0 0 auto;padding:7px 11px;border-radius:15px;background:#eaf1ff;color:#4e73e7;font-size:9px;font-weight:800}.task-open{position:absolute;z-index:3;right:13px;bottom:9px;border:0;background:transparent;color:#6b78a0;cursor:pointer}.glass-task.completed .timeline-dot{background:#25b98e}.glass-task.completed .task-copy h3,.glass-task.completed .task-copy p{color:#a8b2ca}.glass-task.completed .task-chip{background:#e7f8f3;color:#36a887}.glass-task.deferred .timeline-dot{background:#ff8a34}.glass-task.deferred .task-chip{background:#fff0e4;color:#f28037}
 .help-panel{padding:22px 18px}.help-heading{margin-bottom:13px}.help-heading p{margin:4px 0 0;color:#96a0bc;font-size:9px}.glass-help{width:100%;height:56px;margin-bottom:10px;padding:0 15px;display:grid;grid-template-columns:25px 1fr auto;align-items:center;gap:9px;border:1px solid rgba(255,255,255,.8);border-radius:18px;text-align:left;font-weight:800;box-shadow:inset 0 1px 0 rgba(255,255,255,.84),0 8px 18px rgba(73,94,158,.07);backdrop-filter:blur(17px);cursor:pointer}.glass-help b{font-size:20px}.glass-help i{font-style:normal;opacity:.55}.glass-help.cyan{color:#20b9d4;background:linear-gradient(105deg,rgba(217,249,252,.83),rgba(235,252,255,.54))}.glass-help.violet{color:#7657f6;background:linear-gradient(105deg,rgba(236,230,255,.87),rgba(246,242,255,.58))}.glass-help.rose{color:#fa7295;background:linear-gradient(105deg,rgba(255,234,241,.88),rgba(255,245,248,.55))}.health-note{display:grid;gap:4px;margin-top:5px;padding:12px 14px;border-radius:16px;background:linear-gradient(110deg,#edf7ff,#efedff);font-size:10px}.health-note span{color:#7380a4;font-size:9px}
 .feedback-panel{margin-top:18px;padding:18px 20px;display:grid;grid-template-columns:1fr 1.4fr auto;align-items:center;gap:14px;border-radius:20px;background:rgba(255,255,255,.72);box-shadow:0 12px 28px rgba(65,82,150,.09)}.feedback-panel p{margin:0;color:#5265e8;font-size:9px;font-weight:900}.feedback-panel h3{margin:4px 0 0;font-size:13px}.feedback-panel input{height:38px;border:1px solid #dde3f3;border-radius:11px;padding:0 11px}.feedback-panel button{height:38px;border:0;border-radius:11px;padding:0 15px;background:#596bf0;color:#fff;font-weight:800}

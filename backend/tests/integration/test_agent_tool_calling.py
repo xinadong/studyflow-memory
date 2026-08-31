@@ -979,21 +979,21 @@ class AgentToolCallingTests(unittest.TestCase):
                 "goal": "学习BFS", "available_minutes": 25,
                 "preferred_minutes": None, "task_type": "study",
                 "knowledge_point": "BFS",
-            })),
+            }), 502),
             ("/agent/check", {
                 "user_id": "missing-check-field", "course": "数据结构与算法",
                 "knowledge_point": "BFS", "level": "recall",
             }, ToolCall("missing-check", "generate_understanding_question", {
                 "knowledge_point": "BFS", "level": "recall", "example_first": False,
-            })),
+            }), 200),
             ("/agent/recover", {
                 "user_id": "missing-recover-field", "course": "数据结构与算法",
                 "block_type": "too_hard", "context": "任务太难",
             }, ToolCall("missing-recover", "generate_recovery_action", {
                 "block_type": "too_hard", "context": "任务太难",
-            })),
+            }), 502),
         ]
-        for route, payload, tool_call in cases:
+        for route, payload, tool_call, expected_status in cases:
             with self.subTest(route=route):
                 llm = SequencedLLM([
                     LLMResult(text=None, tool_calls=[tool_call], model="gemini-3.7-flash"),
@@ -1002,8 +1002,9 @@ class AgentToolCallingTests(unittest.TestCase):
                 ])
                 app.dependency_overrides[get_llm] = lambda llm=llm: llm
                 response = self.client.post(route, json=payload)
-                self.assertEqual(response.status_code, 502)
-                self.assertEqual(response.json()["detail"]["code"], "invalid_model_output")
+                self.assertEqual(response.status_code, expected_status)
+                if expected_status == 502:
+                    self.assertEqual(response.json()["detail"]["code"], "invalid_model_output")
 
     def test_evaluation_without_memory_mode_injects_no_memories(self):
         session = self.Session()
@@ -1560,6 +1561,217 @@ class AgentToolCallingTests(unittest.TestCase):
         ))
         session.close()
         self.assertEqual(state.understanding_level, "transfer")
+
+    def test_check_continues_dialogue_and_only_completes_after_multiple_turns(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall("dialogue-tool", "generate_understanding_question", {
+                "knowledge_point": "BFS", "level": "transfer", "example_first": False,
+            })], model="qwen-plus"),
+            LLMResult(text=(
+                '{"feedback":"解释准确，并能迁移到无权图最短路径。",'
+                '"missing_dimensions":[],"assessed_level":"transfer",'
+                '"next_question":"如果图中存在权重，你会如何调整算法选择？",'
+                '"guidance_type":"encouragement","mastery_status":"ready"}'
+            ), model="qwen-plus"),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/check", json={
+            "user_id": "dialogue-user", "course": "数据结构与算法",
+            "knowledge_point": "BFS", "level": "transfer",
+            "answer": "无权图中我会用 BFS 分层扩展，首次到达就是最短边数。",
+            "conversation_history": [
+                {"role": "assistant", "content": "BFS 为什么能求无权图最短路？"},
+                {"role": "user", "content": "因为它按照距离逐层访问。"},
+            ],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["guidance_type"], "encouragement")
+        self.assertEqual(body["mastery_status"], "ready")
+        self.assertIn("存在权重", body["question"])
+        self.assertIn("本轮 2 次用户作答", body["mastery_summary"])
+        self.assertEqual(body["review_recommendation"]["duration_minutes"], 10)
+        self.assertIn("7 天后", body["review_recommendation"]["reason"])
+
+    def test_check_help_request_accepts_hint_only_provider_output(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall("help-tool", "generate_understanding_question", {
+                "knowledge_point": "BFS", "level": "recall", "example_first": False,
+            })], model="qwen-plus"),
+            # Some OpenAI-compatible providers naturally return a hint object
+            # for "I don't know" instead of the full assessment schema.
+            LLMResult(text='{"hint":"先想一想：待访问节点需要按什么顺序取出？"}', model="qwen-plus"),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/check", json={
+            "user_id": "help-user", "course": "数据结构与算法",
+            "knowledge_point": "BFS", "level": "recall", "answer": "我不太知道",
+            "hint_preference": "example",
+            "conversation_history": [
+                {"role": "assistant", "content": "请解释 BFS 的核心流程。"},
+            ],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["guidance_type"], "hint")
+        self.assertEqual(body["mastery_status"], "ongoing")
+        self.assertEqual(body["assessed_level"], "recall")
+        self.assertIn("待访问节点", body["feedback"])
+        self.assertIn("最不确定", body["question"])
+
+    def test_check_normalizes_sparse_provider_assessment(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall("sparse-tool", "generate_understanding_question", {
+                "knowledge_point": "BFS", "level": "recall", "example_first": False,
+            })], model="qwen-plus"),
+            LLMResult(text=(
+                '{"response":"B、C 都是相邻节点，已经抓住逐层访问的顺序。",'
+                '"missing_dimensions":["mechanism (queue-based FIFO)"],'
+                '"next_question":"为什么它们会先于下一层节点出队？"}'
+            ), model="qwen-plus"),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/check", json={
+            "user_id": "sparse-user", "course": "数据结构与算法",
+            "knowledge_point": "BFS", "level": "recall", "answer": "B，C",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("逐层访问", body["feedback"])
+        self.assertEqual(body["assessed_level"], "recall")
+        self.assertEqual(body["mastery_status"], "ongoing")
+        self.assertEqual(body["missing_dimensions"], ["运行机制（队列的先进先出）"])
+        self.assertNotIn("recall", body["mastery_summary"])
+
+    def test_check_uses_plain_text_after_failed_json_repair(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall("plain-tool", "generate_understanding_question", {
+                "knowledge_point": "BFS", "level": "recall", "example_first": False,
+            })], model="qwen-plus"),
+            LLMResult(text="先判断这两个节点是否处于同一层。", model="qwen-plus"),
+            LLMResult(text="B、C 属于同一层；再想想队列如何保持这一顺序。", model="qwen-plus"),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/check", json={
+            "user_id": "plain-user", "course": "数据结构与算法",
+            "knowledge_point": "BFS", "level": "recall", "answer": "B，C",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("同一层", response.json()["feedback"])
+        self.assertEqual(response.json()["mastery_status"], "ongoing")
+
+    def test_check_diagram_hint_returns_structured_visual_steps(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall("diagram-tool", "generate_understanding_question", {
+                "knowledge_point": "BFS", "level": "recall", "example_first": False,
+            })], model="qwen-plus"),
+            LLMResult(text=(
+                '{"hint":"先观察逐层扩展过程",'
+                '"visual_steps":["起点进入队列","取出队首节点","未访问邻居入队","重复直到队列为空"]}'
+            ), model="qwen-plus"),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/check", json={
+            "user_id": "diagram-help-user", "course": "数据结构与算法",
+            "knowledge_point": "BFS", "level": "recall",
+            "answer": "我不会，请给我图示提示", "hint_preference": "diagram",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["guidance_type"], "hint")
+        self.assertEqual(body["visual_steps"], [
+            "起点进入队列", "取出队首节点", "未访问邻居入队", "重复直到队列为空",
+        ])
+
+    def test_check_explicit_full_answer_request_is_explained_without_fake_mastery(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall("full-answer-tool", "generate_understanding_question", {
+                "knowledge_point": "BFS", "level": "recall", "example_first": False,
+            })], model="qwen-plus"),
+            LLMResult(text=(
+                '{"full_answer":"BFS 使用队列逐层扩展，并用访问标记避免重复。",'
+                '"next_question":"为什么队列的先进先出能维持按层访问？"}'
+            ), model="qwen-plus"),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/check", json={
+            "user_id": "full-answer-user", "course": "数据结构与算法",
+            "knowledge_point": "BFS", "level": "recall",
+            "answer": "你直接告诉我答案吧", "guidance_request": "full_answer",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["guidance_type"], "full_answer")
+        self.assertEqual(body["mastery_status"], "ongoing")
+        self.assertIn("逐层扩展", body["feedback"])
+        self.assertIn("先进先出", body["question"])
+
+    def test_check_without_answer_never_exposes_feedback_or_assessment(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall("question-only-tool", "generate_understanding_question", {
+                "knowledge_point": "BFS", "level": "recall", "example_first": False,
+            })], model="gpt-5.6-terra"),
+            # Simulate a provider ignoring the prompt and returning a reference
+            # answer. The API boundary must still suppress it.
+            LLMResult(text=(
+                '{"feedback":"BFS uses a queue and visits nodes level by level.",'
+                '"missing_dimensions":["时间复杂度"],"assessed_level":"recall"}'
+            ), model="gpt-5.6-terra"),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/check", json={
+            "user_id": "question-only-user", "course": "数据结构与算法",
+            "knowledge_point": "BFS", "level": "recall",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("BFS", body["question"])
+        self.assertEqual(body["feedback"], "")
+        self.assertEqual(body["missing_dimensions"], [])
+        self.assertIsNone(body["assessed_level"])
+        session = self.Session()
+        state = session.scalar(select(KnowledgeStateRecord).where(
+            KnowledgeStateRecord.user_id == "question-only-user"
+        ))
+        session.close()
+        self.assertIsNone(state)
+
+    def test_check_without_answer_accepts_provider_empty_feedback_fields(self):
+        llm = SequencedLLM([
+            LLMResult(text=None, tool_calls=[ToolCall("empty-feedback-tool", "generate_understanding_question", {
+                "knowledge_point": "BFS", "level": "recall", "example_first": False,
+            })], model="qwen-plus"),
+            LLMResult(
+                text='{"feedback":"","missing_dimensions":[],"assessed_level":null}',
+                model="qwen-plus",
+            ),
+        ])
+        app.dependency_overrides[get_llm] = lambda: llm
+
+        response = self.client.post("/agent/check", json={
+            "user_id": "qwen-question-only-user", "course": "数据结构与算法",
+            "knowledge_point": "BFS", "level": "recall",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["feedback"], "")
+        self.assertEqual(body["missing_dimensions"], [])
+        self.assertIsNone(body["assessed_level"])
 
     def test_invalid_assessed_level_fails_without_writing_knowledge_state(self):
         llm = SequencedLLM([

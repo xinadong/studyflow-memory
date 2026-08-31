@@ -11,7 +11,7 @@ export interface ApiErrorShape {
 const messages: Record<string, string> = {
   model_not_configured: '模型尚未配置，请联系演示人员。',
   provider_timeout: '模型响应超时，请稍后重试。',
-  provider_unavailable: '模型服务暂时不可用，请稍后重试。',
+  provider_unavailable: '模型服务连接连续失败，已保留你的输入，请稍后重试。',
   provider_rejected: '模型服务拒绝了本次请求。',
   invalid_model_output: '模型返回格式异常，请重新生成。',
   invalid_tool_arguments: 'Agent 工具参数校验失败。',

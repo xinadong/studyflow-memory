@@ -53,6 +53,9 @@ export interface UnderstandingCheckRequest {
   material: string
   level: UnderstandingLevel
   answer?: string
+  conversation_history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  hint_preference?: 'example' | 'definition' | 'analogy' | 'diagram'
+  guidance_request?: 'full_answer'
 }
 
 export interface UnderstandingCheckResponse extends MemoryTrace {
@@ -61,7 +64,18 @@ export interface UnderstandingCheckResponse extends MemoryTrace {
   question: string
   feedback: string
   missing_dimensions: string[]
+  guidance_type: 'question' | 'hint' | 'correction' | 'full_answer' | 'encouragement'
+  mastery_status: 'ongoing' | 'ready'
+  visual_steps: string[]
+  mastery_summary?: string | null
+  review_recommendation?: ReviewRecommendation | null
   metrics: Record<string, number>
+}
+
+export interface ReviewRecommendation {
+  due_date: string
+  duration_minutes: number
+  reason: string
 }
 
 export interface RecoveryRequest {

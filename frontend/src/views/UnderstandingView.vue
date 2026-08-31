@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 import MemoryReference from '../components/MemoryReference.vue'
@@ -8,10 +9,12 @@ import { checkUnderstanding } from '../services/agent'
 import { errorMessage } from '../services/api'
 import { usePlanStore } from '../stores/plan'
 import { useSessionStore } from '../stores/session'
+import { useTutorStore } from '../stores/tutor'
 import type { Task, UnderstandingCheckResponse, UnderstandingLevel } from '../types'
 import uploadMaterialIcon from '../assets/upload-material.svg'
 
 const session = useSessionStore(), plans = usePlanStore()
+const router = useRouter(), tutor = useTutorStore()
 const level = ref<UnderstandingLevel>('recall'), material = ref(''), answer = ref('')
 const materialInput = ref<HTMLInputElement | null>(null)
 const selectedMaterialName = ref('')
@@ -45,6 +48,19 @@ async function onMaterialSelected(event: Event){
   material.value = await file.text()
 }
 async function requestQuestion(withAnswer=false){ busy.value=true; error.value=''; try{ result.value=await checkUnderstanding({user_id:session.userId,course:session.course,knowledge_point:activeTask.value?.knowledge_point||session.knowledgePoint||'当前知识点',task_type:activeTask.value?.task_type||'study',material:material.value,level:level.value,...(withAnswer?{answer:answer.value}:{})}) }catch(e){error.value=errorMessage(e)}finally{busy.value=false} }
+function startTutor(){
+  const task = activeTask.value ?? null
+  if (task) session.selectedTask = task
+  tutor.start({
+    course: task?.course || session.course,
+    knowledgePoint: task?.knowledge_point || session.knowledgePoint || '当前知识点',
+    taskType: task?.task_type || 'study',
+    level: level.value,
+    material: material.value,
+    task,
+  })
+  void router.push('/study/session')
+}
 function selectLevel(value:UnderstandingLevel){level.value=value;result.value=null;answer.value=''}
 function nextLevel(){const i=levels.indexOf(level.value);selectLevel(levels[Math.min(i+1,levels.length-1)]);requestQuestion()}
 </script>
@@ -74,7 +90,7 @@ function nextLevel(){const i=levels.indexOf(level.value);selectLevel(levels[Math
   </section>
   <div class="action-grid" :class="{ 'has-result': result }">
     <article class="upload-card"><span class="upload-icon" aria-hidden="true"><img :src="uploadMaterialIcon" alt="" /></span><span class="upload-copy"><strong>添加文本材料</strong><small>正文仅用于生成本轮问题</small></span><span class="file-types">{{ selectedMaterialName || '支持 TXT · Markdown；PDF、Word、图片待接入解析' }}</span><button class="choose-material" type="button" @click="chooseMaterial">选择文本</button><input ref="materialInput" class="sr-only" type="file" accept=".txt,.md,text/plain,text/markdown" @change="onMaterialSelected"/></article>
-    <button v-if="!result" class="start-companion" type="button" :disabled="busy" @click="requestQuestion()"><strong>{{ busy ? '正在生成' : '开始伴学' }} <span>{{ busy ? '…' : '→' }}</span></strong><small>{{ busy ? 'Flow Tutor 正在准备本轮问题' : '已选择 1 个任务 · 1 种方式' }}</small></button>
+    <button v-if="!result" class="start-companion" type="button" @click="startTutor"><strong>开始伴学 <span>→</span></strong><small>进入多轮苏格拉底对话 · 已选择 1 个任务</small></button>
   </div>
   <div v-if="busy || error || result" class="companion-output">
     <LoadingState v-if="busy" text="正在结合课程材料与解释偏好生成问题…"/>

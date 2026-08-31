@@ -79,8 +79,8 @@ function openMemories() {
       </div>
       <button class="edit-button" type="button" @click="profileOpen = !profileOpen">{{ profileOpen ? '收起资料' : '编辑资料' }}</button>
       <div v-if="profileOpen" class="edit-panel">
-        <label>昵称<input value="小杨同学" /></label>
-        <label>本周目标<input value="18 小时" /></label>
+        <label>昵称<input placeholder="例如：小杨同学" /></label>
+        <label>本周目标<input placeholder="例如：18 小时" /></label>
         <button type="button" @click="profileOpen = false; notify('个人资料已保存')">保存更改</button>
       </div>
     </section>

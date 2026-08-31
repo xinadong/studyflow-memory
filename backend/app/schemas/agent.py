@@ -1,6 +1,6 @@
 """Agent 计划、理解检验和恢复 API 模型。"""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -50,6 +50,9 @@ class UnderstandingCheckRequest(BaseModel):
     material: str = ""
     level: Literal["recall", "relate", "transfer"] = "recall"
     answer: str | None = None
+    conversation_history: list[dict[str, str]] = Field(default_factory=list, max_length=24)
+    hint_preference: Literal["example", "definition", "analogy", "diagram"] | None = None
+    guidance_request: Literal["full_answer"] | None = None
 
 
 class UnderstandingCheckResponse(BaseModel):
@@ -58,10 +61,21 @@ class UnderstandingCheckResponse(BaseModel):
     question: str
     feedback: str
     missing_dimensions: list[str]
+    guidance_type: Literal["question", "hint", "correction", "full_answer", "encouragement"] = "question"
+    mastery_status: Literal["ongoing", "ready"] = "ongoing"
+    visual_steps: list[str] = Field(default_factory=list)
+    mastery_summary: str | None = None
+    review_recommendation: "ReviewRecommendation | None" = None
     retrieved_memory_ids: list[str]
     used_memory_ids: list[str]
     candidate_memory_ids: list[str]
     metrics: dict[str, int]
+
+
+class ReviewRecommendation(BaseModel):
+    due_date: date
+    duration_minutes: int = Field(ge=5, le=60)
+    reason: str
 
 
 class RecoveryRequest(BaseModel):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
@@ -158,21 +158,166 @@ def _required_text(data: dict[str, Any], field_name: str) -> str:
     return value.strip()
 
 
+def _is_help_request(answer: str | None) -> bool:
+    if not answer:
+        return False
+    normalized = re.sub(r"[\s，。！？、,.!?]", "", answer).lower()
+    if len(normalized) > 30:
+        return False
+    if any(marker in normalized for marker in (
+        "不会", "不知道", "不太会", "不清楚", "没思路", "没有思路",
+        "不太知道", "不怎么知道", "卡住了", "卡住", "不理解", "没懂",
+        "看不懂", "想不出来", "答不上来", "没概念", "毫无头绪",
+        "请提示", "给点提示", "帮我一下", "提示一下",
+    )):
+        return True
+    # Accept natural short variants such as “我不太明白” or “这题完全不懂”
+    # without treating a longer answer that contains a local uncertainty as a
+    # wholesale help request.
+    return bool(re.fullmatch(
+        r"(?:我|这个|这题|这个问题)?(?:也|真的|确实|还是)?"
+        r"(?:不太|不怎么|完全|实在)?(?:会|知道|清楚|明白|理解|懂)",
+        normalized,
+    ))
+
+
+def _chinese_missing_dimension(value: str) -> str:
+    """Render provider dimension labels as learner-facing Chinese text."""
+    normalized = value.strip().lower()
+    known = {
+        "mechanism": "运行机制",
+        "mechanism (queue-based fifo)": "运行机制（队列的先进先出）",
+        "reasoning": "推理依据",
+        "reasoning (why layer-by-layer implies shortest path in unweighted graphs)":
+            "推理依据（为什么逐层访问能保证无权图最短路径）",
+        "definition": "核心定义",
+        "example": "具体示例",
+        "complexity": "时间与空间复杂度",
+        "edge cases": "边界情况",
+        "application": "应用场景",
+    }
+    if normalized in known:
+        return known[normalized]
+    keyword_labels = (
+        ("mechanism", "运行机制"), ("queue", "队列机制"),
+        ("reason", "推理依据"), ("shortest path", "最短路径成立的原因"),
+        ("complex", "复杂度分析"), ("edge", "边界情况"),
+        ("example", "具体示例"), ("application", "应用场景"),
+    )
+    for keyword, label in keyword_labels:
+        if keyword in normalized:
+            return label
+    # Do not leak an arbitrary English rubric label into the Chinese UI.
+    if re.search(r"[a-z]", normalized):
+        return "相关原理的完整说明"
+    return value.strip()
+
+
 def _validate_plan_final(data: dict[str, Any]) -> dict[str, Any]:
     data["explanation"] = _required_text(data, "explanation")
     return data
 
 
-def _validate_check_final(data: dict[str, Any], *, answer: str | None) -> dict[str, Any]:
-    data["feedback"] = _required_text(data, "feedback")
+def _validate_check_final(
+    data: dict[str, Any], *, answer: str | None, needs_help: bool = False,
+    requests_full_answer: bool = False, requested_level: str = "recall",
+) -> dict[str, Any]:
+    if not answer:
+        # A question-generation request has no learner evidence to evaluate.
+        # Normalize the provider payload instead of requiring feedback, so an
+        # empty response does not trigger repair and leaked answers are hidden.
+        data["feedback"] = ""
+        data["missing_dimensions"] = []
+        data["assessed_level"] = None
+        data["next_question"] = None
+        data["guidance_type"] = "question"
+        data["mastery_status"] = "ongoing"
+        return data
+
+    if requests_full_answer:
+        explanation = next((
+            data.get(field) for field in (
+                "feedback", "full_answer", "answer", "explanation", "response",
+            )
+            if isinstance(data.get(field), str) and data.get(field).strip()
+        ), None)
+        if explanation is None:
+            raise LLMCallError("invalid_model_output", "模型调用失败：完整讲解内容缺失")
+        next_question = data.get("next_question")
+        data["feedback"] = explanation.strip()
+        data["missing_dimensions"] = []
+        data["assessed_level"] = "recall"
+        data["next_question"] = next_question.strip() if isinstance(next_question, str) else None
+        data["guidance_type"] = "full_answer"
+        data["mastery_status"] = "ongoing"
+        return data
+
+    if needs_help:
+        # A short explicit help request is not evidence to grade. Qwen and
+        # other compatible providers may return a natural hint object instead
+        # of the full assessment schema, so normalize it into a safe tutoring
+        # turn rather than failing the whole conversation.
+        feedback = next((
+            data.get(field) for field in ("feedback", "hint", "response", "explanation")
+            if isinstance(data.get(field), str) and data.get(field).strip()
+        ), "没关系，我们先把这个问题拆成一个更小的步骤。")
+        next_question = data.get("next_question")
+        data["feedback"] = feedback.strip()
+        data["missing_dimensions"] = []
+        data["assessed_level"] = "recall"
+        data["next_question"] = next_question.strip() if isinstance(next_question, str) else None
+        data["guidance_type"] = "hint"
+        data["mastery_status"] = "ongoing"
+        return data
+
+    feedback = next((
+        data.get(field) for field in (
+            "feedback", "evaluation", "analysis", "response", "message", "comment",
+            "评价", "反馈",
+        )
+        if isinstance(data.get(field), str) and data.get(field).strip()
+    ), None)
+    if feedback is None:
+        # A usable tutoring turn is safer than dropping the learner's answer.
+        # Keep the judgment deliberately neutral when the provider omitted its
+        # assessment text, and continue with a diagnostic question.
+        feedback = "我已经记录你的回答。我们再通过一个更具体的问题确认你的理解。"
+    data["feedback"] = feedback.strip()
     missing = data.get("missing_dimensions")
-    if not isinstance(missing, list) or not all(isinstance(item, str) for item in missing):
-        raise LLMCallError("invalid_model_output", "模型调用失败：反馈字段格式错误")
+    if isinstance(missing, str):
+        missing = [missing]
+    if not isinstance(missing, list):
+        missing = []
+    missing = [str(item).strip() for item in missing if str(item).strip()]
+    data["missing_dimensions"] = missing
     assessed_level = data.get("assessed_level")
-    if answer and assessed_level not in {"recall", "relate", "transfer"}:
-        raise LLMCallError("invalid_model_output", "模型调用失败：理解层级评估结果无效")
-    if assessed_level is not None and assessed_level not in {"recall", "relate", "transfer"}:
-        raise LLMCallError("invalid_model_output", "模型调用失败：理解层级评估结果无效")
+    level_aliases = {
+        "记忆": "recall", "复述": "recall", "理解": "relate", "关联": "relate",
+        "应用": "transfer", "迁移": "transfer",
+    }
+    assessed_level = level_aliases.get(str(assessed_level).lower(), assessed_level)
+    provider_assessed = assessed_level in {"recall", "relate", "transfer"}
+    if not provider_assessed:
+        if assessed_level is not None:
+            raise LLMCallError("invalid_model_output", "模型调用失败：理解层级评估结果无效")
+        assessed_level = requested_level if requested_level in {"recall", "relate", "transfer"} else "recall"
+    data["assessed_level"] = assessed_level
+    next_question = data.get("next_question")
+    if not isinstance(next_question, str):
+        next_question = None
+    data["next_question"] = next_question
+    guidance_type = data.get("guidance_type", "encouragement")
+    if guidance_type not in {"hint", "correction", "full_answer", "encouragement"}:
+        guidance_type = "correction" if missing else "encouragement"
+    mastery_status = data.get("mastery_status", "ongoing")
+    if mastery_status not in {"ongoing", "ready"}:
+        mastery_status = "ongoing"
+    # Missing assessment fields are never enough evidence for mastery, even
+    # though the turn remains usable instead of surfacing a format error.
+    if not provider_assessed:
+        mastery_status = "ongoing"
+    data["guidance_type"] = guidance_type
+    data["mastery_status"] = mastery_status
     return data
 
 
@@ -275,6 +420,7 @@ class AgentService:
         tool_names: tuple[str, ...],
         bind_arguments,
         validate_final: Callable[[dict[str, Any]], dict[str, Any]],
+        text_fallback: Callable[[str | None], dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]], ModelTrace]:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -336,7 +482,17 @@ class AgentService:
                         trace.latency_ms += repaired.latency_ms
                         trace.retry_count += repaired.retry_count
                         try:
-                            return validate_final(_json_object(repaired.text)), outputs, trace
+                            repaired_data = _json_object(repaired.text)
+                        except LLMCallError as parse_error:
+                            if text_fallback is not None:
+                                try:
+                                    return validate_final(text_fallback(repaired.text)), outputs, trace
+                                except LLMCallError:
+                                    pass
+                            parse_error.format_repair_count = 1
+                            raise parse_error from validation_error
+                        try:
+                            return validate_final(repaired_data), outputs, trace
                         except LLMCallError as repaired_error:
                             repaired_error.format_repair_count = 1
                             raise repaired_error from validation_error
@@ -623,7 +779,8 @@ class AgentService:
     def check(
         self, *, user_id: str, course: str, knowledge_point: str,
         level: str, material: str = "", answer: str | None = None,
-        task_type: str = "study",
+        task_type: str = "study", conversation_history: list[dict[str, str]] | None = None,
+        hint_preference: str | None = None, guidance_request: str | None = None,
     ) -> dict[str, Any]:
         retrieval_started = perf_counter()
         memories = self._retrieve(MemoryFilter(
@@ -660,6 +817,20 @@ class AgentService:
                 }
             return call.arguments
 
+        safe_history = [
+            {"role": item.get("role", ""), "content": item.get("content", "")[:2000]}
+            for item in (conversation_history or [])[-24:]
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
+        needs_help = _is_help_request(answer)
+        requests_full_answer = guidance_request == "full_answer"
+        hint_styles = {
+            "example": "示例：给一个最小具体例子，但不直接完成整题",
+            "definition": "定义：只回顾一个解决当前卡点所需的核心定义",
+            "analogy": "类比：用一个熟悉事物解释当前概念，但保留关键一步让用户回答",
+            "diagram": "图示：用简短文本流程或 ASCII 图表示关系，但不公布完整答案",
+        }
+        hint_instruction = hint_styles.get(hint_preference)
         final, outputs, trace = self._run_model(
             operation="check",
             user_id=user_id,
@@ -667,19 +838,127 @@ class AgentService:
             user_payload={
                 "user_id": user_id, "course": course, "knowledge_point": knowledge_point,
                 "task_type": task_type, "level": level, "material": material, "answer": answer,
+                "conversation_history": safe_history,
+                "learner_needs_help": needs_help,
+                "hint_preference": hint_preference,
+                "guidance_request": guidance_request,
                 "confirmed_memories": [m.content for m in memories.used],
-                "instruction": "必须调用问题生成工具；最终仅返回JSON对象，字段为 feedback、missing_dimensions 和 assessed_level。提供 answer 时 assessed_level 必须为 recall、relate 或 transfer。",
+                "instruction": (
+                    "必须调用问题生成工具；最终仅返回JSON对象，字段为 feedback、missing_dimensions 和 assessed_level。"
+                    + (
+                        "已有用户 answer：结合 conversation_history，只依据用户真实回答选择反馈策略。"
+                        + (
+                            "用户明确请求完整答案：请给出准确、分步骤的完整讲解，但不要据此判定用户已掌握；"
+                            "讲解后提出一个简短检查问题。guidance_type 使用 full_answer，mastery_status 使用 ongoing。"
+                            if requests_full_answer else ""
+                        )
+                        + (
+                            "用户明确表示不会或卡住：不要评分、不要假装其回答正确、不要立刻公布完整答案；"
+                            f"按用户选择的方式提供一个轻量提示（{hint_instruction}），再提出一个更容易的追问。"
+                            + (
+                                "图示模式必须额外返回 visual_steps 数组，包含 3 到 6 个简短、有顺序的流程节点；"
+                                "不要用类比段落代替图示。"
+                                if hint_preference == "diagram" else ""
+                            )
+                            if needs_help and hint_instruction else
+                            "用户明确表示不会或卡住：不要评分或假装其回答正确；只给一个最小提示并提出一个更容易的追问。"
+                            if needs_help else ""
+                        )
+                        +
+                        "可选择 hint（提示）、correction（指出错误）、full_answer（在多次卡住或存在关键误解时公布完整答案）"
+                        "或 encouragement（肯定并提升难度）。同时给出一个自然的 next_question。"
+                        "assessed_level 必须为 recall、relate 或 transfer；guidance_type 必须为上述四类之一；"
+                        "mastery_status 只能为 ongoing 或 ready。仅在用户已能准确解释并迁移应用时使用 ready。"
+                        if answer
+                        else
+                        "尚无用户 answer：不得回答问题、不得提供参考答案或评估用户；"
+                        "feedback 必须为空字符串，missing_dimensions 必须为空数组，"
+                        "assessed_level 必须为 null。"
+                    )
+                ),
             },
             tool_names=CHECK_TOOL_NAMES,
             bind_arguments=bind,
-            validate_final=lambda data: _validate_check_final(data, answer=answer),
+            validate_final=lambda data: _validate_check_final(
+                data, answer=answer, needs_help=needs_help,
+                requests_full_answer=requests_full_answer,
+                requested_level=level,
+            ),
+            text_fallback=lambda text: {
+                "feedback": (text or "").strip() or "我已经记录你的回答。",
+                "missing_dimensions": [],
+                "assessed_level": level,
+                "mastery_status": "ongoing",
+            },
         )
         questions = [output for name, output in outputs if name == "generate_understanding_question"]
         if not questions:
             raise LLMCallError("missing_required_tool", "模型调用失败：模型未生成理解检验问题")
         question = questions[-1]
-        missing = final["missing_dimensions"]
-        assessed_level = final.get("assessed_level")
+        # The first request only prepares a question. Enforce that boundary in
+        # server code as well as in the prompt so a provider cannot leak a
+        # reference answer or fabricate an assessment before the learner has
+        # submitted evidence.
+        if answer:
+            feedback = final["feedback"]
+            missing = [_chinese_missing_dimension(str(item)) for item in final["missing_dimensions"]]
+            assessed_level = final.get("assessed_level")
+            next_question = (final.get("next_question") or "").strip()
+            guidance_type = final.get("guidance_type", "encouragement")
+            user_turns = sum(1 for item in safe_history if item["role"] == "user") + 1
+            requested_ready = final.get("mastery_status") == "ready"
+            mastery_status = (
+                "ready" if requested_ready and assessed_level == "transfer"
+                and not missing and user_turns >= 2 else "ongoing"
+            )
+            raw_visual_steps = final.get("visual_steps")
+            visual_steps = (
+                [item.strip() for item in raw_visual_steps if isinstance(item, str) and item.strip()][:6]
+                if hint_preference == "diagram" and isinstance(raw_visual_steps, list) else []
+            )
+            if hint_preference == "diagram" and len(visual_steps) < 3:
+                fragments = [
+                    item.strip(" ：:，,")
+                    for item in re.split(r"[。；;\n]+", feedback)
+                    if item.strip(" ：:，,")
+                ]
+                visual_steps = fragments[:6] if len(fragments) >= 3 else [
+                    f"定位 {knowledge_point} 的起点",
+                    "按核心规则推进一步",
+                    "观察结果并回答追问",
+                ]
+        else:
+            feedback = ""
+            missing = []
+            assessed_level = None
+            next_question = ""
+            guidance_type = "question"
+            mastery_status = "ongoing"
+            visual_steps = []
+        mastery_summary = None
+        review_recommendation = None
+        if answer:
+            level_labels = {
+                "recall": "基础复述（能复述核心概念）",
+                "relate": "关联理解（能说明概念之间的联系）",
+                "transfer": "迁移应用（能在新情境中运用）",
+            }
+            interval_days = {"recall": 1, "relate": 3, "transfer": 7}.get(assessed_level, 1)
+            duration_minutes = {"recall": 15, "relate": 12, "transfer": 10}.get(assessed_level, 15)
+            evidence_turns = sum(1 for item in safe_history if item["role"] == "user") + 1
+            gap_text = f"；仍需补充：{'、'.join(missing)}" if missing else "；本轮未发现待补充维度"
+            mastery_summary = (
+                f"基于本轮 {evidence_turns} 次用户作答，当前形成性层级为"
+                f"{level_labels.get(assessed_level, '需要继续巩固')}{gap_text}。"
+            )
+            review_recommendation = {
+                "due_date": (datetime.now().date() + timedelta(days=interval_days)).isoformat(),
+                "duration_minutes": duration_minutes,
+                "reason": (
+                    f"依据本轮对话证据与当前 {assessed_level or 'recall'} 层级，"
+                    f"建议 {interval_days} 天后用一道变式题复核；这只是建议，需由用户确认后加入计划。"
+                ),
+            }
         if answer:
             state = self.session.scalar(select(KnowledgeStateRecord).where(
                 KnowledgeStateRecord.user_id == user_id,
@@ -709,9 +988,18 @@ class AgentService:
             raise
         return {
             **question,
-            "feedback": final["feedback"],
+            "question": next_question or (
+                f"关于{knowledge_point}，你目前最不确定的是定义、关键步骤，还是应用场景？"
+                if needs_help else question["question"]
+            ),
+            "feedback": feedback,
             "missing_dimensions": [str(item) for item in missing],
             "assessed_level": assessed_level,
+            "guidance_type": guidance_type,
+            "mastery_status": mastery_status,
+            "visual_steps": visual_steps,
+            "mastery_summary": mastery_summary,
+            "review_recommendation": review_recommendation,
             **_memory_payload(memories),
             "metrics": metrics,
         }
