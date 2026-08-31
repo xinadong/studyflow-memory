@@ -1,9 +1,5 @@
 # StudyFlow 记忆检索评测文档
 
-> 作者：C 角色　|　更新：2026-08-26
-> 评测对象：B 已实现的记忆检索链路（`app/memory/retriever.py` + `ranker.py` + `policy.py`）
-> 评测代码：`backend/app/evaluation/` + `scripts/run_evaluation.py`（C 新增，未改动 B 的任何代码）
-
 ---
 
 ## 1. 评测目标
@@ -155,7 +151,7 @@ python scripts/run_evaluation.py --real --base-url http://127.0.0.1:8000
 
 ### 7.2 §8.1 记忆成本 / §8.2 对话速度（已归档到参赛文档）
 
-这两项（方案 §8.1 / §8.2）的实测结果已归档进 `参赛文档-评测部分.md` §2 / §3，本文件不再重复维护：
+这两项实测结果由以下基准脚本产生，关键结果汇总如下：
 
 - **§8.2 对话速度**：`scripts/bench_sqlite_latency.py`，文件级真实 SQLite，100/1000/5000 条三档 P95 全达标（5000 条时 SQLite 检索 64.63ms、本地处理 6.44ms）。
 - **§8.1 记忆成本**：`scripts/bench_cost_comparison.py`，记忆注入恒 5 条 / 14 token，完整历史注入随反馈事件数线性增长，节省 84.9%~98.5%。

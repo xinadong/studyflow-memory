@@ -14,3 +14,12 @@ dist/
 .vscode/
 
 backend/.venv-local/
+
+# Internal submission drafts; keep docs/ limited to the public documentation set.
+docs/architecture.md
+docs/backend-team-guide.md
+docs/memory-contract.md
+docs/project-plan.md
+docs/参赛作品提交表填写文案.md
+docs/参赛文档-评测部分.md
+docs/演示视频文稿.md
