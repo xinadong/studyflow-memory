@@ -15,7 +15,7 @@ class ImportedTaskInput(BaseModel):
 
 
 class PlanRequest(BaseModel):
-    user_id: str
+    user_id: str | None = None
     course: str
     goal: str = Field(min_length=1)
     available_minutes: int = Field(ge=1, le=240)
@@ -52,7 +52,7 @@ class PlanResponse(BaseModel):
 
 
 class UnderstandingCheckRequest(BaseModel):
-    user_id: str
+    user_id: str | None = None
     course: str
     knowledge_point: str
     task_type: str = "study"
@@ -89,7 +89,7 @@ class ReviewRecommendation(BaseModel):
 
 
 class RecoveryRequest(BaseModel):
-    user_id: str
+    user_id: str | None = None
     course: str
     block_type: BlockType
     context: str = ""

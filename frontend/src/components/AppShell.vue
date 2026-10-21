@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '../stores/session'
 import { usePlanStore } from '../stores/plan'
+import { useAuthStore } from '../stores/auth'
+import { syncAccountScopedState } from '../stores/accountState'
 import { getHealth, errorMessage } from '../services/api'
 import ErrorNotice from './ErrorNotice.vue'
 import LoadingState from './LoadingState.vue'
@@ -11,6 +13,8 @@ import AgentIdentity from './AgentIdentity.vue'
 import MemoryReference from './MemoryReference.vue'
 
 const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
 const session = useSessionStore()
 const plans = usePlanStore()
 const tasksLoading = ref(true)
@@ -25,10 +29,16 @@ async function restoreTasks() {
   catch (cause) { if (version === taskLoadVersion) tasksError.value = errorMessage(cause) }
   finally { if (version === taskLoadVersion) tasksLoading.value = false }
 }
-watch(() => session.userId, (_, previous) => {
-  if (previous !== undefined) session.clearFocusProgress()
+watch(() => auth.user?.id, userId => {
+  syncAccountScopedState(userId ?? null)
+  if (!userId) return
+  session.userId = userId
   void restoreTasks()
 }, { immediate: true })
+async function logout() {
+  await auth.logout()
+  await router.replace('/login')
+}
 const backendStatus = ref<'checking' | 'online' | 'offline'>('checking')
 let healthCheckTimer: number | undefined
 const nav = [
@@ -70,10 +80,11 @@ onBeforeUnmount(() => window.clearInterval(healthCheckTimer))
         </RouterLink>
       </nav>
       <div class="sidebar-principle"><b>反馈记忆闭环</b><div><span>学习</span><i>→</i><span>反馈</span><i>→</i><span>记忆</span><i>→</i><span>再调整</span></div><small>每次调整都成为下一次的依据</small></div>
-      <label class="user-field">
-        <span>演示用户</span>
-        <input v-model.trim="session.userId" aria-label="演示用户 ID" />
-      </label>
+      <div class="user-field">
+        <span>当前账号</span>
+        <strong>{{ auth.user?.email }}</strong>
+        <button type="button" @click="logout">退出登录</button>
+      </div>
     </aside>
     <main class="main-content"><LoadingState v-if="tasksLoading" text="正在恢复保存的任务…" /><ErrorNotice v-else-if="tasksError" :message="tasksError" @retry="restoreTasks" /><RouterView v-else /></main>
     <aside v-if="showAside" class="context-aside" :class="{ 'study-aside': isStudy }">
@@ -135,7 +146,8 @@ nav a.router-link-active { color: var(--brand); background: white; box-shadow: 0
 .sidebar-principle { margin-top:0; padding:16px; border:0; border-radius:18px; background:linear-gradient(90deg,#eef2ff,#f1ecff); color: var(--muted); font-size: 9px; box-shadow:none }
 .sidebar-principle b{display:block;margin-bottom:11px;color:#172052;font-size:10px}.sidebar-principle div{display:flex;align-items:center;gap:4px;font-weight:800}.sidebar-principle i { color: var(--brand); font-style: normal; }.sidebar-principle small{display:block;margin-top:9px;color:#9ba4bf;font-size:8px}
 .user-field { margin-top: auto; display: grid; gap: 7px; padding:14px; border-radius:16px; background:#fff; color: var(--muted); font-size: 10px; font-weight: 700; }
-.user-field input { min-width: 0; border: 1px solid var(--border); border-radius: 12px; padding: 9px; color: var(--text); background: white; }
+.user-field strong { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.user-field button { border: 1px solid var(--border); border-radius: 10px; padding: 8px; color: var(--muted); background: white; font: inherit; cursor: pointer; }
 .main-content { min-width: 0; padding: 40px 0 70px 36px; }
 .context-aside { position: sticky; top: 0; height: 100vh; margin-left:36px; padding: 40px 28px; display:flex; flex-direction:column; gap:18px; background:linear-gradient(180deg,#f3f5fd 0%,#f6f8ff 70%); border-left:1px solid #e9edf8; }
 .context-aside h2 { margin:0; font-size: 22px; line-height:1.25; }

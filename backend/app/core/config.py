@@ -12,6 +12,7 @@ DEFAULT_DATABASE_URL = f"sqlite:///{(PROJECT_ROOT / 'data' / 'studyflow.db').as_
 
 class Settings(BaseSettings):
     app_name: str = "StudyFlow Memory API"
+    app_env: str = "development"
     database_url: str = DEFAULT_DATABASE_URL
     llm_base_url: str | None = None
     llm_api_key: str | None = None
@@ -21,6 +22,9 @@ class Settings(BaseSettings):
     # the final structured response. Keep one request from timing out before
     # the Agent workflow can finish its bounded retry policy.
     request_timeout_seconds: float = 120.0
+    auth_session_days: int = 30
+    demo_email: str | None = None
+    demo_password: str | None = None
     # Resolve the shared project .env independently of the process cwd.
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
 

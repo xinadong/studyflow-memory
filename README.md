@@ -110,6 +110,9 @@ LLM_API_KEY=
 LLM_MODEL=gemini-3.7-flash
 LLM_MAX_RETRIES=2
 REQUEST_TIMEOUT_SECONDS=120
+AUTH_SESSION_DAYS=30
+DEMO_EMAIL=demo@studyflow.local
+DEMO_PASSWORD=请替换为本地演示密码
 ```
 
 各字段说明：
@@ -123,6 +126,9 @@ REQUEST_TIMEOUT_SECONDS=120
 | `REQUEST_TIMEOUT_SECONDS` | 否   | `120`                          | 单次模型请求超时（秒），覆盖工具调用 + 最终结构化输出的慢响应 |
 | `DATABASE_URL`            | 否   | 项目根目录 `data/studyflow.db` | 数据库连接串。未设置时由 `config.py` 依据 `PROJECT_ROOT` 自动生成绝对路径；`.env.example` 示例为 `sqlite:///../data/studyflow.db`（相对 `backend/` 解析到同一文件）。Docker 内固定为 `sqlite:////app/data/studyflow.db` |
 | `APP_ENV`                 | 否   | 无                             | 环境标记，当前未参与业务逻辑                                 |
+| `AUTH_SESSION_DAYS`       | 否   | `30`                           | HttpOnly 浏览器会话有效天数                                  |
+| `DEMO_EMAIL`              | 否   | 无                             | 演示账号邮箱；配置后启动时确保 `demo-user` 存在              |
+| `DEMO_PASSWORD`           | 否   | 无                             | 演示账号密码，仅保存在本地 `.env`                            |
 
 > 密钥仅保存在本地 `.env`，已写入 `.gitignore`，请勿提交到仓库。
 
@@ -237,6 +243,10 @@ docker compose up --build
 | 方法   | 路径                    | 用途                                  |
 | ------ | ----------------------- | ------------------------------------- |
 | GET    | `/health`               | 服务健康检查                          |
+| POST   | `/auth/register`        | 注册并建立登录会话                    |
+| POST   | `/auth/login`           | 登录并建立登录会话                    |
+| POST   | `/auth/logout`          | 撤销当前登录会话                      |
+| GET    | `/auth/me`              | 获取当前登录账号                      |
 | POST   | `/agent/plan`           | 生成/调整学习计划                     |
 | POST   | `/agent/check`          | 复述—关联—迁移三级理解检验            |
 | POST   | `/agent/recover`        | 按阻塞类型生成恢复动作                |
@@ -248,10 +258,10 @@ docker compose up --build
 | DELETE | `/memories/{memory_id}` | 软删除记忆（保留审计记录）            |
 | POST   | `/evaluation/compare`   | 有记忆/无记忆计划对照                 |
 | GET    | `/metrics`              | Token、延迟与记忆引用汇总             |
-| GET    | `/tasks`                | 按用户读取保存的任务与复习安排 |
-| POST   | `/tasks`                | 保存任务或用户确认的复习安排 |
-| PATCH  | `/tasks/{task_id}`       | 更新任务完成状态 |
-| DELETE | `/tasks/{task_id}`       | 软删除任务 |
+| GET    | `/tasks`                | 读取当前账号保存的任务与复习安排 |
+| POST   | `/tasks`                | 保存当前账号的任务或复习安排 |
+| PATCH  | `/tasks/{task_id}`       | 更新当前账号任务状态 |
+| DELETE | `/tasks/{task_id}`       | 软删除当前账号任务 |
 
 ---
 

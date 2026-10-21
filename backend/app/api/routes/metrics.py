@@ -5,8 +5,9 @@ from math import ceil
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db
+from app.api.dependencies import get_current_user, get_db
 from app.infrastructure.models.agent_runs import AgentRunRecord
+from app.infrastructure.models.auth import UserRecord
 
 router = APIRouter()
 
@@ -20,8 +21,10 @@ def _percentile(values: list[int], percentile: float) -> int:
 
 
 @router.get("/metrics")
-def metrics(db: Session = Depends(get_db)):
-    runs = db.scalars(select(AgentRunRecord).order_by(AgentRunRecord.created_at.desc())).all()
+def metrics(user: UserRecord = Depends(get_current_user), db: Session = Depends(get_db)):
+    runs = db.scalars(select(AgentRunRecord).where(
+        AgentRunRecord.user_id == user.id,
+    ).order_by(AgentRunRecord.created_at.desc())).all()
     successful = sum(run.status == "success" for run in runs)
     failed = sum(run.status == "failed" for run in runs)
     operation_counts: dict[str, int] = {}

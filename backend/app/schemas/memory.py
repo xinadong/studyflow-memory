@@ -40,7 +40,7 @@ class MemoryOut(DurationFields):
 
 
 class MemoryCreate(ScopedMemoryInput, DurationFields):
-    user_id: str
+    user_id: str | None = None
     memory_type: MemoryType
     course: str = ""
     content: str

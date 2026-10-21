@@ -2,8 +2,9 @@
 
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import get_agent_service
+from app.api.dependencies import get_agent_service, get_current_user
 from app.agents.orchestrator import AgentService
+from app.infrastructure.models.auth import UserRecord
 from app.infrastructure.llm.adapter import LLMCallError
 from app.schemas.evaluation import EvaluationCompareRequest, EvaluationCompareResponse
 
@@ -11,15 +12,20 @@ router = APIRouter()
 
 
 @router.post("/evaluation/compare", response_model=EvaluationCompareResponse)
-def compare(payload: EvaluationCompareRequest, service: AgentService = Depends(get_agent_service)):
+def compare(
+    payload: EvaluationCompareRequest,
+    user: UserRecord = Depends(get_current_user),
+    service: AgentService = Depends(get_agent_service),
+):
     try:
         with_memory = service.plan(
-            **payload.model_dump(),
+            user_id=user.id,
+            **payload.model_dump(exclude={"user_id"}),
             persist_task=False,
             operation="evaluation_with_memory",
         )
         without_memory = service.plan(
-            user_id=payload.user_id, course=payload.course, goal=payload.goal,
+            user_id=user.id, course=payload.course, goal=payload.goal,
             available_minutes=payload.available_minutes,
             task_type=payload.task_type,
             knowledge_point=payload.knowledge_point,
@@ -28,7 +34,7 @@ def compare(payload: EvaluationCompareRequest, service: AgentService = Depends(g
             operation="evaluation_without_memory",
         )
     except LLMCallError as error:
-        service.record_failure("evaluation_compare", payload.user_id, error)
+        service.record_failure("evaluation_compare", user.id, error)
         raise
     delta = {
         "duration_minutes": with_memory["tasks"][0]["duration_minutes"] - without_memory["tasks"][0]["duration_minutes"],

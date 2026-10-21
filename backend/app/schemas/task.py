@@ -10,7 +10,7 @@ TaskStatus = Literal["pending", "active", "completed", "deferred"]
 
 class TaskCreate(BaseModel):
     id: str = Field(min_length=1, max_length=128)
-    user_id: str = Field(min_length=1, max_length=128)
+    user_id: str | None = None
     course: str = Field(min_length=1, max_length=255)
     title: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=10000)
@@ -24,7 +24,7 @@ class TaskCreate(BaseModel):
     def normalize_date(cls, value):
         return value.astimezone(timezone.utc) if value else value
 
-    @field_validator("user_id", "course", "title", "task_type", "id")
+    @field_validator("course", "title", "task_type", "id")
     @classmethod
     def nonblank(cls, value: str) -> str:
         if not value.strip():

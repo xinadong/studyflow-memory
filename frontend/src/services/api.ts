@@ -9,6 +9,9 @@ export interface ApiErrorShape {
 }
 
 const messages: Record<string, string> = {
+  auth_required: '登录状态已失效，请重新登录。',
+  invalid_credentials: '邮箱或密码错误。',
+  email_already_registered: '该邮箱已注册，请直接登录。',
   model_not_configured: '模型尚未配置，请联系演示人员。',
   provider_timeout: '模型响应超时，请稍后重试。',
   provider_unavailable: '模型服务连接连续失败，已保留你的输入，请稍后重试。',
@@ -41,6 +44,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}, tim
     const response = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
+      credentials: 'include',
       signal: controller.signal,
     })
     if (response.status === 204) return undefined as T

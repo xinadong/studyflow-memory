@@ -11,12 +11,13 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db, get_llm, get_memory_repository
+from app.api.dependencies import get_current_user, get_db, get_llm, get_memory_repository
 from app.agents.orchestrator import _json_object
 from app.domain.entities.memory import Memory
 from app.domain.value_objects.memory_type import BlockType, ConfirmationStatus, MemoryType
 from app.infrastructure.llm.adapter import LLMAdapter, LLMCallError, LLMResult
 from app.infrastructure.models.feedback import FeedbackRecord
+from app.infrastructure.models.auth import UserRecord
 from app.infrastructure.repositories.sqlalchemy_memory_repository import SqlAlchemyMemoryRepository
 from app.infrastructure.telemetry.agent_run import record_agent_run
 from app.memory.review_schedule import parse_review_interval_days
@@ -236,10 +237,12 @@ def _classify_feedback(payload: FeedbackCreate, llm: LLMAdapter) -> tuple[
 @router.post("/feedback", response_model=FeedbackResponse, status_code=status.HTTP_201_CREATED)
 def create_feedback(
     payload: FeedbackCreate,
+    user: UserRecord = Depends(get_current_user),
     db: Session = Depends(get_db),
     repo: SqlAlchemyMemoryRepository = Depends(get_memory_repository),
     llm: LLMAdapter = Depends(get_llm),
 ):
+    payload = payload.model_copy(update={"user_id": user.id})
     classification_result = None
     if payload.feedback_type == MemoryType.KNOWLEDGE_STATE:
         raise LLMCallError(

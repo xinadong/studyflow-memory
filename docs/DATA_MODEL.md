@@ -4,11 +4,17 @@ SQLite 默认文件为 `D:\黑客松\data\studyflow.db`，由 SQLAlchemy 在应�
 
 ## 表
 
+- `users`：邮箱账号和 scrypt 密码哈希；演示账号固定使用 `demo-user`。
+- `auth_sessions`：服务端会话令牌哈希、过期时间和撤销时间；浏览器只保存 HttpOnly Cookie。
 - `memories`：15 个记忆字段，`active=False` 表示软删除；
 - `feedback_events`：用户原始反馈和是否明确表达；
 - `tasks`：计划生成的微任务；
 - `knowledge_states`：形成性理解反馈，不代表永久能力判断；
 - `agent_runs`：每次 Agent 的 Token、检索/模型延迟、记忆 ID、模型状态和工具轨迹。
+
+首次启用账号功能时，`data_migrations` 中的
+`legacy_users_to_demo_user` 标记会把认证前历史表中的用户记录归并到
+`demo-user`，不删除任何任务、记忆或审计行；之后不会重复执行。
 
 ### `agent_runs` 审计字段
 

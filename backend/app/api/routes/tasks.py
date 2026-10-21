@@ -1,12 +1,13 @@
-"""Task persistence for the single-user demo; user_id is not authentication."""
+"""Authenticated task persistence."""
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db
+from app.api.dependencies import get_current_user, get_db
+from app.infrastructure.models.auth import UserRecord
 from app.infrastructure.models.task import TaskRecord
 from app.schemas.task import TaskCreate, TaskList, TaskOut, TaskUpdate
 
@@ -37,27 +38,28 @@ def _owned(db: Session, task_id: str, user_id: str) -> TaskRecord:
 
 
 @router.get("/tasks", response_model=TaskList)
-def list_tasks(user_id: str = Query(min_length=1, max_length=128), db: Session = Depends(get_db)):
+def list_tasks(user: UserRecord = Depends(get_current_user), db: Session = Depends(get_db)):
     rows = db.scalars(select(TaskRecord).where(
-        TaskRecord.user_id == user_id, TaskRecord.status != "deleted",
+        TaskRecord.user_id == user.id, TaskRecord.status != "deleted",
     ).order_by(TaskRecord.created_at, TaskRecord.id)).all()
     return TaskList(items=[_out(row) for row in rows])
 
 
 @router.post("/tasks", response_model=TaskOut)
-def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
+def create_task(payload: TaskCreate, user: UserRecord = Depends(get_current_user), db: Session = Depends(get_db)):
     # A client-generated ID allows a retry after a lost response without
     # inserting a second review. Never let an existing ID overwrite a task.
     existing = db.get(TaskRecord, payload.id)
     if existing is not None:
-        if existing.user_id != payload.user_id or existing.status == "deleted":
+        if existing.user_id != user.id or existing.status == "deleted":
             raise HTTPException(409, "Task ID already exists")
         current = _out(existing).model_dump()
         submitted = payload.model_dump(exclude={"user_id"})
         if any(current[key] != value for key, value in submitted.items()):
             raise HTTPException(409, "Task ID already exists with different content")
         return _out(existing)
-    task = TaskRecord(**payload.model_dump(), status="pending", created_at=datetime.now(timezone.utc))
+    task_data = payload.model_dump(exclude={"user_id"})
+    task = TaskRecord(**task_data, user_id=user.id, status="pending", created_at=datetime.now(timezone.utc))
     db.add(task)
     db.commit()
     db.refresh(task)
@@ -66,8 +68,8 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
 
 @router.patch("/tasks/{task_id}", response_model=TaskOut)
 def update_task(task_id: str, payload: TaskUpdate,
-                user_id: str = Query(min_length=1, max_length=128), db: Session = Depends(get_db)):
-    task = _owned(db, task_id, user_id)
+                user: UserRecord = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = _owned(db, task_id, user.id)
     task.status = payload.status
     db.commit()
     db.refresh(task)
@@ -75,9 +77,8 @@ def update_task(task_id: str, payload: TaskUpdate,
 
 
 @router.delete("/tasks/{task_id}", status_code=204)
-def delete_task(task_id: str, user_id: str = Query(min_length=1, max_length=128),
-                db: Session = Depends(get_db)):
-    task = _owned(db, task_id, user_id)
+def delete_task(task_id: str, user: UserRecord = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = _owned(db, task_id, user.id)
     task.status = "deleted"
     db.commit()
     return Response(status_code=204)

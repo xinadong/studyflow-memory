@@ -45,7 +45,17 @@ LLM_API_KEY=<仅保存在本地，不要提交>
 LLM_MODEL=gemini-3.7-flash
 LLM_MAX_RETRIES=2
 REQUEST_TIMEOUT_SECONDS=120
+AUTH_SESSION_DAYS=30
+DEMO_EMAIL=demo@studyflow.local
+DEMO_PASSWORD=<仅保存在本地，不要提交>
 ```
+
+## 账号与会话
+
+- `POST /auth/register` 和 `POST /auth/login` 成功后设置 HttpOnly、SameSite=Lax 的会话 Cookie。
+- `POST /auth/logout` 会在服务端撤销会话；`GET /auth/me` 返回当前账号。
+- 除 `/health` 和认证接口外，业务接口均要求登录。任务、记忆、反馈、知识状态、Agent 运行和指标都按服务端会话中的账号隔离，客户端提交的 `user_id` 不决定归属。
+- 配置 `DEMO_EMAIL` 与 `DEMO_PASSWORD` 后，启动时会确保 ID 为 `demo-user` 的演示账号存在。历史数据库中的任务、记忆、反馈、知识状态和 Agent 审计记录会一次性归并到该账号。
 
 模型接口采用 OpenAI 兼容的 `POST /v1/chat/completions` 和 Tool Calling。
 后端会自动给未带 `/v1` 的地址补上 `/v1`。API Key 缺失、模型服务不可用、
@@ -195,21 +205,20 @@ POST /agent/plan
 
 ## 任务与复习持久化
 
-任务接口不调用模型。当前演示版本使用 `user_id` 分组，并检查操作对象的用户归属；该字段不是登录认证。
+任务接口不调用模型。任务归属由登录会话决定，客户端不再传入 `user_id`。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/tasks?user_id=...` | 读取该用户未删除的任务，包含完成状态和复习日期 |
-| POST | `/tasks` | 保存任务或用户明确确认的复习安排 |
-| PATCH | `/tasks/{task_id}?user_id=...` | 更新状态：`pending`、`active`、`completed`、`deferred` |
-| DELETE | `/tasks/{task_id}?user_id=...` | 软删除；重新加载和 Agent 学习状态查询均不返回该任务 |
+| GET | `/tasks` | 读取当前账号未删除的任务，包含完成状态和复习日期 |
+| POST | `/tasks` | 保存当前账号的任务或用户明确确认的复习安排 |
+| PATCH | `/tasks/{task_id}` | 更新状态：`pending`、`active`、`completed`、`deferred` |
+| DELETE | `/tasks/{task_id}` | 软删除；重新加载和 Agent 学习状态查询均不返回该任务 |
 
 保存示例：
 
 ```json
 {
   "id": "client-generated-unique-id",
-  "user_id": "demo-user",
   "course": "数据结构",
   "title": "BFS · 对话后复习",
   "description": "根据本轮理解检验安排复习",
@@ -228,13 +237,13 @@ POST /agent/plan
 
 ### 手工验收
 
-1. 重启后端并刷新前端，使用同一个演示用户 ID。
+1. 启动后端并打开前端，使用演示账号登录。
 2. 生成或添加真实任务，在专注页点击完成；也可在伴学达到完成条件后选择完成并退出。
 3. 关闭标签页再重新打开，确认任务仍为已完成。
 4. 在伴学结束时确认添加复习，关闭标签页再重新打开，确认首页“已保存的复习安排”仍显示相同日期和任务。
 5. 停止后端再尝试完成任务或保存复习，确认页面提示失败而不是显示成功；恢复后端后可重试。
 
-以上验证不会把界面预览任务写入数据库。账号、身份认证，以及恢复调整中的时长和顺延状态持久化不在本次修改范围内。
+以上验证不会把界面预览任务写入数据库。恢复调整中的时长和顺延状态持久化不在本次修改范围内。
 
 
 ## 偏好使用方式与保存范围

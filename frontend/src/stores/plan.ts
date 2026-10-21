@@ -67,6 +67,14 @@ export const usePlanStore = defineStore('plan', () => {
     } : null
     localAdjustment.value = ''
   }
+  function resetAccountState() {
+    loadVersion += 1
+    plan.value = null
+    statuses.value = {}
+    reviewTasks.value = []
+    localAdjustment.value = ''
+    persistedIds.clear()
+  }
   async function saveTask(userId: string, task: Task) {
     const savedTask = await createTask(userId, task)
     persistedIds.add(savedTask.id)
@@ -156,5 +164,5 @@ export const usePlanStore = defineStore('plan', () => {
     }
     return localAdjustment.value
   }
-  return { plan, previewTasks, reviewTasks, statuses, localAdjustment, totalMinutes, setPlan, addImportedTasks, addReviewTask, removeTask, applyRecoveryAdjustment, loadTasks, saveTask, completeTask, removeSavedTask }
+  return { plan, previewTasks, reviewTasks, statuses, localAdjustment, totalMinutes, setPlan, addImportedTasks, addReviewTask, removeTask, applyRecoveryAdjustment, loadTasks, resetAccountState, saveTask, completeTask, removeSavedTask }
 })

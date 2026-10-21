@@ -5,6 +5,8 @@ import RecoveryView from './views/RecoveryView.vue'
 import ProfileView from './views/ProfileView.vue'
 import FocusTimerView from './views/FocusTimerView.vue'
 import TutorSessionView from './views/TutorSessionView.vue'
+import LoginView from './views/LoginView.vue'
+import { useAuthStore } from './stores/auth'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -14,6 +16,7 @@ export const router = createRouter({
     return { top: 0 }
   },
   routes: [
+    { path: '/login', component: LoginView, meta: { public: true } },
     { path: '/', redirect: '/today' },
     { path: '/today', component: TodayView },
     { path: '/study', component: UnderstandingView },
@@ -27,4 +30,17 @@ export const router = createRouter({
     { path: '/demo/:feature', redirect: '/recovery' },
     { path: '/:pathMatch(.*)*', redirect: '/today' },
   ],
+})
+
+router.beforeEach(async (to) => {
+  const auth = useAuthStore()
+  if (!auth.initialized) {
+    try {
+      await auth.restore()
+    } catch {
+      auth.initialized = true
+    }
+  }
+  if (to.meta.public) return auth.user ? '/today' : true
+  return auth.user ? true : { path: '/login', query: { redirect: to.fullPath } }
 })

@@ -8,7 +8,7 @@ from app.schemas.duration import DurationFields
 
 
 class FeedbackCreate(ScopedMemoryInput, DurationFields):
-    user_id: str
+    user_id: str | None = None
     course: str = ""
     feedback_type: MemoryType | None = None
     content: str = Field(min_length=1)

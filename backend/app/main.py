@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import agent, evaluation, feedback, memories, metrics, tasks
+from app.api.routes import agent, auth, evaluation, feedback, memories, metrics, tasks
 from app.infrastructure.llm.adapter import LLMCallError
 from app.infrastructure.database import init_db
 
@@ -48,6 +48,7 @@ async def handle_llm_error(_, exc: LLMCallError) -> JSONResponse:
     )
 
 app.include_router(agent.router, prefix="/agent", tags=["agent"])
+app.include_router(auth.router, tags=["auth"])
 app.include_router(feedback.router, tags=["feedback"])
 app.include_router(memories.router, tags=["memories"])
 app.include_router(evaluation.router, tags=["evaluation"])
