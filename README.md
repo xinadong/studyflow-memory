@@ -33,7 +33,7 @@
 | 迁移         | Alembic（已配置）                           | 配置见 `backend/alembic.ini`；当前建表通过 `Base.metadata.create_all()` 完成 |
 | LLM 接入     | OpenAI 兼容 Chat Completions + Tool Calling | 通过 `infrastructure/llm/` 适配，业务层不绑定具体供应商      |
 | HTTP 客户端  | httpx                                       | 调用模型服务                                                 |
-| 测试         | pytest                                      | 99 个后端测试                                                |
+| 测试         | pytest                                      | 132 个后端测试                                                |
 
 ### 前端（`frontend/`）
 
@@ -96,7 +96,11 @@ studyflow-memory-jingwei-main/
 
 ### 后端 `.env`
 
-复制 `.env.example` 为 `.env`，按需填写：
+`.env` 是项目根目录的配置文件，用来保存模型接口地址、密钥和数据库配置。
+
+首次配置时，将项目根目录的 `.env.example` 复制为同目录下的 `.env`（已有 `.env` 时跳过，不要覆盖现有配置）。
+
+然后编辑 `.env`，按需填写：
 
 ```env
 APP_ENV=development
@@ -132,43 +136,62 @@ REQUEST_TIMEOUT_SECONDS=120
 
 ### 0. 前置依赖
 
-- Python ≥ 3.11
+- Python ≥ 3.11（含 pip）
 - Node.js ≥ 18（推荐 20+）与 npm
 
-### 1. 启动后端
+以下命令均从项目根目录开始执行，适用于 Windows PowerShell、macOS 和 Linux 终端。请先准备好所需的 Python 环境；后端和前端需要分别在两个终端中运行。
 
-```bash
+### 1. 首次准备依赖
+
+在项目根目录打开终端，安装后端依赖：
+
+```sh
 cd backend
-python -m venv .venv
-# Windows（PowerShell）
-.venv\Scripts\Activate.ps1
-# macOS / Linux
-source .venv/bin/activate
+python --version
+python -m pip install -e .
+```
 
-pip install -e .
+确认 Python 版本为 3.11 或以上。`python -m pip` 会将依赖安装到当前 Python 环境中。安装依赖只需在首次运行或依赖变更时执行。
+
+在项目根目录另开终端，首次安装或依赖变更时安装前端依赖：
+
+```sh
+cd frontend
+npm install
+```
+
+### 2. 日常启动后端（终端一）
+
+在项目根目录打开终端，执行：
+
+```sh
+cd backend
 python mock_server.py
 ```
 
-`mock_server.py` 是本地开发入口，等价于 `uvicorn app.main:app --host 127.0.0.1 --port 8000`。启动后：
+看到 `Uvicorn running on http://127.0.0.1:8000` 表示后端已启动：
 
-- 健康检查：`http://127.0.0.1:8000/health` → `{"status":"ok"}`
-- Swagger 文档：`http://127.0.0.1:8000/docs`
+- 健康检查：[http://127.0.0.1:8000/health](http://127.0.0.1:8000/health) → `{"status":"ok"}`
+- Swagger 文档：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-> 不使用 `mock_server.py` 也可以直接运行 `uvicorn app.main:app --reload`（需在 `backend/` 目录下）。
+`mock_server.py` 是本地开发入口，Agent 接口会调用 `.env` 中配置的真实模型。也可以在 `backend/` 目录使用 `python -m uvicorn app.main:app --reload` 启动开发热重载服务。
 
-### 2. 启动前端
+### 3. 日常启动前端（终端二）
 
-```bash
+在项目根目录另开一个终端，执行：
+
+```sh
 cd frontend
-npm install
 npm run dev
 ```
 
-默认地址 `http://localhost:5173`。后端已配置 CORS，允许 `localhost:5173` / `127.0.0.1:5173` 及预览地址 `4173` 访问。
+浏览器打开 [http://localhost:5173](http://localhost:5173)，以终端实际显示的地址为准。后端已配置 CORS，允许 `localhost:5173` / `127.0.0.1:5173` 及预览地址 `4173` 访问。
 
-### 3. 验证
+### 4. 验证与停止
 
-在 Swagger 或前端提交一个计划请求（示例见 `docs/api.md`），确认 `/agent/plan` 返回任务与记忆引用。
+在 Swagger 或前端提交一个计划请求（示例见 `docs/api.md`），确认 `/agent/plan` 返回任务与记忆引用。模型功能要求 `.env` 中的 `LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL` 配置有效；仅打开前端页面不能证明模型连接成功。
+
+运行期间保持两个终端开启。停止项目时，在两个终端中分别按 `Ctrl+C`。
 
 ---
 
@@ -209,7 +232,7 @@ docker compose up --build
 
 ## 接口概览
 
-后端共开放 12 个接口，完整字段与示例见 [`docs/api.md`](docs/api.md)。
+后端共开放 16 个接口，完整字段与示例见 [`docs/api.md`](docs/api.md)。
 
 | 方法   | 路径                    | 用途                                  |
 | ------ | ----------------------- | ------------------------------------- |
@@ -225,6 +248,10 @@ docker compose up --build
 | DELETE | `/memories/{memory_id}` | 软删除记忆（保留审计记录）            |
 | POST   | `/evaluation/compare`   | 有记忆/无记忆计划对照                 |
 | GET    | `/metrics`              | Token、延迟与记忆引用汇总             |
+| GET    | `/tasks`                | 按用户读取保存的任务与复习安排 |
+| POST   | `/tasks`                | 保存任务或用户确认的复习安排 |
+| PATCH  | `/tasks/{task_id}`       | 更新任务完成状态 |
+| DELETE | `/tasks/{task_id}`       | 软删除任务 |
 
 ---
 
@@ -232,13 +259,15 @@ docker compose up --build
 
 ### 后端测试
 
-```bash
+在项目根目录打开终端，执行：
+
+```sh
 cd backend
-pip install -e .
-pytest
+python -m pip install -e . pytest
+python -m pytest
 ```
 
-共 99 个测试，位于 `backend/tests/unit/` 与 `backend/tests/integration/`。单元测试使用 `httpx.MockTransport` 注入假模型适配器，不消耗真实模型额度。
+共 132 个测试，位于 `backend/tests/unit/` 与 `backend/tests/integration/`。单元测试使用 `httpx.MockTransport` 注入假模型适配器，不消耗真实模型额度。
 
 ### 评测脚本
 

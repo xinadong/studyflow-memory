@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { usePlanStore } from '../stores/plan'
+import { createTask } from '../services/tasks'
+vi.mock('../services/tasks', () => ({ createTask: vi.fn(), listTasks: vi.fn(), updateTaskStatus: vi.fn(), deleteTask: vi.fn() }))
 
 describe('recovery adjustments update the elastic task flow', () => {
   beforeEach(() => {
@@ -59,17 +61,18 @@ describe('recovery adjustments update the elastic task flow', () => {
     expect(summary).toContain('原倒计时继续')
   })
 
-  it('keeps a future review separate from the current task timeline', () => {
+  it('keeps a future review separate from the current task timeline', async () => {
+    vi.mocked(createTask).mockImplementation(async (_, task) => ({ ...task, status: 'pending', created_at: new Date().toISOString() }))
     const plans = usePlanStore()
     plans.setPlan({
       tasks: [{ id: 'today-1', title: '原有任务', description: '今天学习', duration_minutes: 25, task_type: 'study' }],
       explanation: '今日计划', metrics: {}, retrieved_memory_ids: [], used_memory_ids: [], candidate_memory_ids: [],
     })
 
-    plans.addReviewTask({
+    await plans.addReviewTask('demo-user', {
       id: 'review-bfs', title: 'BFS · 对话后复习', description: '未来复习',
       duration_minutes: 12, task_type: 'review', knowledge_point: 'BFS',
-      due_at: '2026-09-03T19:30:00.000Z',
+      due_at: new Date(Date.now() + 7 * 86400000).toISOString(),
     }, '根据对话证据安排。')
 
     expect(plans.plan?.tasks.map(task => task.id)).toEqual(['today-1'])

@@ -14,9 +14,10 @@ def generate_understanding_question(
 ) -> dict:
     normalized = level if level in LEVEL_QUESTIONS else "recall"
     style = explanation_style
-    if style not in {"example_first", "definition_first", "diagram_first"}:
+    if style not in {"example_first", "definition_first", "diagram_first", "analogy_first"}:
         style = "example_first" if example_first else None
     prefixes = {
+        "analogy_first": "先用一个熟悉的事物作类比，再回答：",
         "example_first": "先看一个简短例子，再回答：",
         "definition_first": "先给出核心定义，再回答：",
         "diagram_first": "先画出一个简图或流程，再回答：",

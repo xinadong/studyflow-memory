@@ -1,0 +1,12 @@
+[
+  {
+    "timestamp": "2026-08-31T21:05:48",
+    "base_url": "http://127.0.0.1:8000",
+    "agent_runs": 223,
+    "input_tokens": 272739,
+    "output_tokens": 77487,
+    "total_model_tokens": 350226,
+    "memory_tokens": 159,
+    "memory_tokens_semantics": "estimated_injected_confirmed_context"
+  }
+]

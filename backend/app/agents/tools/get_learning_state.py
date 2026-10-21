@@ -9,7 +9,8 @@ from app.infrastructure.models.task import TaskRecord
 
 def get_learning_state(session: Session, *, user_id: str, course: str) -> dict:
     tasks = session.scalars(
-        select(TaskRecord).where(TaskRecord.user_id == user_id, TaskRecord.course == course)
+        select(TaskRecord).where(TaskRecord.user_id == user_id, TaskRecord.course == course,
+                                 TaskRecord.status != "deleted")
     ).all()
     knowledge = session.scalars(
         select(KnowledgeStateRecord).where(

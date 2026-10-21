@@ -26,3 +26,5 @@ export const updateMemory = (id: string, payload: Partial<MemoryItem>) => apiReq
 })
 
 export const deleteMemory = (id: string) => apiRequest<void>(`/memories/${id}`, { method: 'DELETE' })
+
+export const getMemory = (id: string) => apiRequest<MemoryItem>(`/memories/${encodeURIComponent(id)}`)

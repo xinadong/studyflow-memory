@@ -3,12 +3,15 @@ import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
+import DateTimePicker from '../components/DateTimePicker.vue'
+import PreferenceOptions from '../components/PreferenceOptions.vue'
+import DurationFields from '../components/DurationFields.vue'
 import { createPlan } from '../services/agent'
 import { errorMessage } from '../services/api'
 import { submitFeedback } from '../services/memories'
 import { usePlanStore } from '../stores/plan'
 import { useSessionStore } from '../stores/session'
-import type { Task, TaskStatus } from '../types'
+import type { Task, TaskStatus, MemoryScope, PreferencePersistence } from '../types'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -17,21 +20,19 @@ const busy = ref(false)
 const error = ref('')
 const showFeedback = ref(false)
 const preference = ref('')
+const preferencePersistence = ref<PreferencePersistence>('once')
+const preferenceScope = ref<MemoryScope>('course')
+const temporaryPreference = ref('')
+const preferredMinutes = ref<number | null>(null)
+const maxMinutes = ref<number | null>(null)
 const feedbackState = ref('')
 const showImport = ref(false)
+const importSaving = ref(false)
 const deleteMode = ref(false)
-const importDrafts = ref([{ course: '', knowledgePoint: '', dueAt: '' }])
+const importDrafts = ref([{ id: crypto.randomUUID(), course: '', knowledgePoint: '', dueAt: '' }])
 const importError = ref('')
 const importSuccess = ref('')
-function defaultDeadline() {
-  const date = new Date()
-  date.setHours(21, 30, 0, 0)
-  if (date.getTime() <= Date.now()) date.setDate(date.getDate() + 1)
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-  return local.toISOString().slice(0, 16)
-}
-const deadlineExample = defaultDeadline()
-const form = reactive<{ available_minutes: number | null; task_type: string; deadline: string }>({ available_minutes: null, task_type: 'study', deadline: '' })
+const form = reactive<{ course: string; knowledgePoint: string; available_minutes: number | null; task_type: string; deadline: string }>({ course: '', knowledgePoint: '', available_minutes: null, task_type: 'study', deadline: '' })
 
 const dateText = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'short',
@@ -49,7 +50,7 @@ const primaryTask = computed(() => {
   return undefined
 })
 const allTasksCompleted = computed(() => timelineTasks.value.length > 0 && completed.value === timelineTasks.value.length)
-const planGoal = computed(() => [session.course.trim(), session.knowledgePoint.trim()].filter(Boolean).join(' · '))
+const planGoal = computed(() => [form.course.trim(), form.knowledgePoint.trim()].filter(Boolean).join(' · '))
 const planDeadlineText = computed(() => form.deadline
   ? new Intl.DateTimeFormat('zh-CN', {
     month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -64,16 +65,19 @@ function statusText(status: TaskStatus) {
 }
 async function generatePlan() {
   const availableMinutes = form.available_minutes
-  if (!session.course.trim() || !session.knowledgePoint.trim() || !availableMinutes || !form.deadline) {
+  if (!form.course.trim() || !form.knowledgePoint.trim() || !availableMinutes || !form.deadline) {
     error.value = '请填写课程、知识点、可用时间和截止时间。'
     return
   }
   busy.value = true
   error.value = ''
+  session.course = form.course
+  session.knowledgePoint = form.knowledgePoint
   try {
     const existingImports = (plans.plan?.tasks ?? []).filter(task => task.due_at)
     const generated = await createPlan({
       user_id: session.userId,
+      temporary_preference: temporaryPreference.value || undefined,
       course: session.course,
       goal: planGoal.value,
       available_minutes: availableMinutes,
@@ -86,6 +90,8 @@ async function generatePlan() {
         { title: planGoal.value, due_at: new Date(form.deadline).toISOString() },
       ],
     })
+    temporaryPreference.value = ''
+    feedbackState.value = ''
     const generatedTitles = new Set(generated.tasks.map(task => task.title))
     plans.setPlan({
       ...generated,
@@ -106,19 +112,21 @@ function startTask(task: Task) {
   plans.statuses[task.id] = 'active'
   router.push('/focus')
 }
-function deleteTask(task: Task) {
-  if (!plans.plan) {
-    plans.removeTask(task.id)
-    if (!plans.previewTasks.length) deleteMode.value = false
-    return
-  }
-  if (session.selectedTask?.id === task.id) session.selectedTask = null
-  plans.removeTask(task.id)
-  if (!plans.plan) deleteMode.value = false
+async function deleteTask(task: Task) {
+  try {
+    if (!plans.plan) {
+      plans.removeTask(task.id)
+      if (!plans.previewTasks.length) deleteMode.value = false
+      return
+    }
+    if (session.selectedTask?.id === task.id) session.selectedTask = null
+    await plans.removeSavedTask(session.userId, task)
+    if (!plans.plan) deleteMode.value = false
+  } catch (cause) { error.value = errorMessage(cause) }
 }
 function openTaskDialog() {
   importError.value = ''
-  importDrafts.value = [{ course: session.course, knowledgePoint: session.knowledgePoint, dueAt: '' }]
+  importDrafts.value = [{ id: crypto.randomUUID(), course: session.course, knowledgePoint: session.knowledgePoint, dueAt: '' }]
   showImport.value = true
 }
 function recover(type: 'time' | 'too_hard') {
@@ -127,32 +135,47 @@ function recover(type: 'time' | 'too_hard') {
   router.push('/recovery')
 }
 async function savePreference() {
-  feedbackState.value = 'saving'
+  if (!preference.value.trim() || feedbackState.value === 'saving') return
   error.value = ''
+  if (preferredMinutes.value && maxMinutes.value && preferredMinutes.value > maxMinutes.value) {
+    error.value = '首选时长不能超过最多时长。'; return
+  }
+  if (preferencePersistence.value === 'once') {
+    temporaryPreference.value = preferredMinutes.value || maxMinutes.value
+      ? [preferredMinutes.value ? '首选' + preferredMinutes.value + '分钟' : '', maxMinutes.value ? '最多' + maxMinutes.value + '分钟' : ''].filter(Boolean).join('，')
+      : preference.value.trim()
+    feedbackState.value = 'temporary'
+    return
+  }
+  if (preferenceScope.value !== 'global' && !form.course.trim()) {
+    error.value = '请先在快速调整中填写适用课程。'; return
+  }
+  if (preferenceScope.value === 'knowledge_point' && !form.knowledgePoint.trim()) {
+    error.value = '请先填写适用知识点。'; return
+  }
+  feedbackState.value = 'saving'
   try {
     await submitFeedback({
-      user_id: session.userId,
-      course: session.course,
-      content: preference.value,
-      feedback_type: 'task_preference',
-      explicit: true,
-      task_type: 'study',
-      knowledge_point: session.knowledgePoint || undefined,
+      user_id: session.userId, scope: preferenceScope.value,
+      course: preferenceScope.value === 'global' ? '' : form.course,
+      preferred_minutes: preferredMinutes.value ?? undefined, max_minutes: maxMinutes.value ?? undefined,
+      content: preference.value, feedback_type: 'task_preference', explicit: true,
+      knowledge_point: preferenceScope.value === 'knowledge_point' ? form.knowledgePoint : undefined,
     })
+    temporaryPreference.value = ''
     feedbackState.value = 'saved'
-  } catch (e) {
-    feedbackState.value = ''
-    error.value = errorMessage(e)
-  }
+    preferencePersistence.value = 'once'
+  } catch (e) { feedbackState.value = ''; error.value = errorMessage(e) }
 }
-function addTask() {
+async function addTask() {
+  if (importSaving.value) return
   importError.value = ''
   if (importDrafts.value.some(task => !task.course.trim() || !task.knowledgePoint.trim() || !task.dueAt)) {
     importError.value = '请填写课程、知识点和截止时间。'
     return
   }
-  const tasks = importDrafts.value.map((draft, index) => ({
-    id: `imported-${Date.now()}-${index}`,
+  const tasks = importDrafts.value.map(draft => ({
+    id: draft.id,
     course: draft.course.trim(),
     title: `${draft.course.trim()} · ${draft.knowledgePoint.trim()}`,
     description: '根据截止时间添加的待安排任务',
@@ -161,14 +184,21 @@ function addTask() {
     knowledge_point: draft.knowledgePoint.trim(),
     due_at: new Date(draft.dueAt).toISOString(),
   }))
-  plans.addImportedTasks(tasks)
+  importSaving.value = true
+  try {
+    for (const task of tasks) {
+      const saved = await plans.saveTask(session.userId, task)
+      plans.addImportedTasks([saved])
+    }
+  } catch (cause) { importError.value = errorMessage(cause); return }
+  finally { importSaving.value = false }
   importSuccess.value = `已添加 ${tasks.length} 个任务`
   showImport.value = false
-  importDrafts.value = [{ course: '', knowledgePoint: '', dueAt: '' }]
+  importDrafts.value = [{ id: crypto.randomUUID(), course: '', knowledgePoint: '', dueAt: '' }]
   window.setTimeout(() => { importSuccess.value = '' }, 3000)
 }
 function removeImportDraft(index: number) {
-  if (importDrafts.value.length === 1) importDrafts.value[0] = { course: '', knowledgePoint: '', dueAt: '' }
+  if (importDrafts.value.length === 1) importDrafts.value[0] = { id: crypto.randomUUID(), course: '', knowledgePoint: '', dueAt: '' }
   else importDrafts.value.splice(index, 1)
 }
 function dueText(task: Task) {
@@ -217,10 +247,10 @@ function dueText(task: Task) {
 
       <form class="settings-card" @submit.prevent="generatePlan">
         <div class="settings-title"><div><h2>快速调整</h2><p>设置学习范围与时间，交给 Agent 安排</p></div></div>
-        <label>课程<input v-model.trim="session.course" required placeholder="例如：数据结构与算法" /></label>
-        <label>知识点<input v-model.trim="session.knowledgePoint" required placeholder="例如：BFS" /></label>
-        <label>可用时间<input v-model.number="form.available_minutes" type="number" min="5" max="120" step="5" required placeholder="例如：25" /></label>
-        <label>截止时间<input v-model="form.deadline" type="datetime-local" required :aria-description="`例如：${deadlineExample}`" /><small class="input-example">示例：{{ deadlineExample.replace('T', ' ') }}</small></label>
+        <label>课程<input v-model.trim="form.course" required placeholder="例如：数据结构与算法" /></label>
+        <label>知识点<input v-model.trim="form.knowledgePoint" required placeholder="例如：BFS" /></label>
+        <label>可用时间<span class="minutes-input"><input v-model.number="form.available_minutes" type="number" min="5" max="120" step="5" required placeholder="例如：25" aria-label="可用时间（分钟）" /><span class="minutes-unit" aria-hidden="true">min</span></span></label>
+        <label>截止时间<DateTimePicker v-model="form.deadline" /></label>
         <button class="generate-button" :disabled="busy">{{ busy ? '正在生成…' : plans.plan ? '重新生成计划' : '生成今日计划' }}</button>
       </form>
     </div>
@@ -268,38 +298,49 @@ function dueText(task: Task) {
       </section>
     </div>
 
-    <div v-if="showImport" class="import-backdrop" @click.self="showImport = false">
+    <div v-if="showImport" class="import-backdrop" @click.self="!importSaving && (showImport = false)">
       <form class="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title" @submit.prevent="addTask">
-        <div class="import-title-row"><div><small>弹性任务流</small><h2 id="import-title">添加任务</h2></div><button type="button" class="import-close" aria-label="关闭" @click="showImport = false">×</button></div>
+        <div class="import-title-row"><div><small>弹性任务流</small><h2 id="import-title">添加任务</h2></div><button type="button" class="import-close" :disabled="importSaving" aria-label="关闭" @click="showImport = false">×</button></div>
         <p class="import-hint">填写课程、知识点和截止时间，系统将以“课程 · 知识点”生成任务，并交给模型安排优先级。</p>
         <div class="import-or"><i />任务信息<i /></div>
         <div class="import-drafts">
           <article v-for="(draft, index) in importDrafts" :key="index" class="import-task-card">
             <div class="import-task-number"><b>任务 {{ index + 1 }}</b><button type="button" aria-label="删除该任务" @click="removeImportDraft(index)">×</button></div>
-            <label>课程<input v-model.trim="draft.course" placeholder="例如：高等数学" autofocus /></label>
-            <label>知识点<input v-model.trim="draft.knowledgePoint" placeholder="例如：导数应用" /></label>
-            <label>截止时间<input v-model="draft.dueAt" type="datetime-local" /></label>
+            <label>课程<input :disabled="importSaving" v-model.trim="draft.course" placeholder="例如：高等数学" autofocus /></label>
+            <label>知识点<input :disabled="importSaving" v-model.trim="draft.knowledgePoint" placeholder="例如：导数应用" /></label>
+            <label>截止时间<DateTimePicker v-model="draft.dueAt" :disabled="importSaving" /></label>
           </article>
         </div>
         <p v-if="importError" class="import-error" role="alert">{{ importError }}</p>
-        <div class="import-actions"><button type="button" class="import-cancel" @click="showImport = false">取消</button><button class="import-confirm">添加到今日任务流</button></div>
+        <div class="import-actions"><button type="button" class="import-cancel" :disabled="importSaving" @click="showImport = false">取消</button><button class="import-confirm" :disabled="importSaving">{{ importSaving ? '正在保存…' : '添加到今日任务流' }}</button></div>
       </form>
     </div>
 
+    <section v-if="plans.reviewTasks.length" class="card panel" aria-label="已保存的复习安排">
+      <h2>已保存的复习安排</h2>
+      <article v-for="review in plans.reviewTasks" :key="review.id">
+        <p><b>{{ review.title }}</b> · {{ dueText(review) }} · {{ plans.statuses[review.id] === 'completed' ? '已完成' : '待复习' }}</p>
+        <button v-if="plans.statuses[review.id] !== 'completed'" class="btn" @click="startTask(review)">开始复习</button>
+      </article>
+    </section>
     <form v-if="showFeedback" class="feedback-panel" @submit.prevent="savePreference">
       <div><p>反馈记忆 · 任务流内部机制</p><h3>告诉 Agent 你希望怎样调整任务</h3></div>
       <input v-model.trim="preference" required aria-label="任务调整偏好" placeholder="例如：我希望每个学习任务控制在 15 分钟以内" />
-      <button :disabled="feedbackState === 'saving'">{{ feedbackState === 'saving' ? '正在记录…' : feedbackState === 'saved' ? '已记录为反馈记忆' : '记录并用于后续计划' }}</button>
+      <div class="preference-settings"><DurationFields v-model:preferred="preferredMinutes" v-model:maximum="maxMinutes" :disabled="feedbackState === 'saving'" /><PreferenceOptions v-model:persistence="preferencePersistence" v-model:scope="preferenceScope" :course="form.course" :knowledge-point="form.knowledgePoint" :disabled="feedbackState === 'saving'" /><p v-if="feedbackState === 'temporary'" class="preference-success" role="status">已用于下一次生成计划，生成成功后自动清除。</p><p v-if="feedbackState === 'saved'" class="preference-success" role="status">已保存为长期偏好，可在个人中心查看或撤销。</p></div>
+      <button class="preference-submit" :disabled="feedbackState === 'saving'">{{ feedbackState === 'saving' ? '正在保存…' : preferencePersistence === 'once' ? '用于下一次计划' : '确认保存长期偏好' }}</button>
     </form>
   </section>
 </template>
 
 <style scoped>
+.preference-settings{grid-column:1/-1;display:grid;gap:16px}.preference-success{margin-top:10px!important;color:#349877!important;font-size:11px!important}.feedback-panel .preference-submit{grid-column:1/-1;justify-self:end}.feedback-panel :deep(.preference-lifetime button){height:auto;background:transparent;color:#7a89ad;font-size:11px;font-weight:500}.feedback-panel :deep(.preference-lifetime button.selected){background:#fff;color:#6866cc;font-weight:700}
+
+.minutes-input{position:relative;display:block;min-width:0}.settings-card .minutes-input input{padding-right:64px}.minutes-unit{position:absolute;right:30px;top:50%;transform:translateY(-50%);color:#8995b2;font-size:11px;font-weight:600;pointer-events:none}
 .today-page{width:820px;color:#172052}.today-header{height:78px;display:flex;align-items:flex-start;justify-content:space-between}.date-line{margin:6px 0 0;color:#596387;font-size:14px}.today-header h1{margin:0;font-size:34px;letter-spacing:-.7px}.sync-state{display:flex;align-items:center;gap:8px;margin-top:7px;padding:8px 12px;border:0;border-radius:16px;background:#fff;box-shadow:0 6px 14px rgba(52,71,173,.08);color:#20a77a;font-size:12px}.sync-state b{display:grid;place-items:center;width:34px;height:30px;border-radius:12px;background:#eef2ff;color:#4f63f6}.sync-state i{width:6px;height:6px;border-radius:50%;background:#20a77a}
 .status-strip{height:84px;margin-bottom:20px;padding:18px 20px;display:grid;grid-template-columns:repeat(4,1fr);align-items:center;border:0;border-radius:22px;background:#fff;box-shadow:0 8px 18px rgba(52,71,173,.08)}.status-strip>div{height:48px;padding:0 20px;display:flex;align-items:center;border-right:1px solid #dce2f4}.status-strip>div:first-child{padding-left:0}.status-strip>div:last-child{border:0}.status-strip p{display:grid;gap:4px;margin:0}.status-strip small{color:#7b88aa;font-size:11px}.status-strip strong{font-size:19px}.brand-value{color:#4f63f6}.cyan-value{color:#28c7df}.rose-value{color:#ff7f96}
 .recovery-adjustment{margin:-4px 0 20px;padding:16px 19px;display:flex;align-items:center;justify-content:space-between;gap:20px;border:1px solid #bfe9dc;border-radius:20px;background:linear-gradient(105deg,#e9faf4,#eef3ff);box-shadow:0 8px 20px rgba(53,105,134,.08)}.recovery-adjustment div{display:grid;gap:4px}.recovery-adjustment span{color:#20a77a;font-size:9px;font-weight:900}.recovery-adjustment strong{font-size:14px}.recovery-adjustment p{margin:0;color:#647392;font-size:10px;line-height:1.5}.recovery-adjustment button{flex:0 0 auto;padding:9px 13px;border:0;border-radius:12px;background:#fff;color:#5367f7;font-size:10px;font-weight:800;cursor:pointer}
 .plan-row{display:grid;grid-template-columns:542px 260px;gap:18px;margin-bottom:14px}.hero-task{position:relative;height:330px;overflow:hidden;padding:24px;border-radius:28px;background:linear-gradient(116deg,#96dff5 0%,#eed0f2 40%,#9ebaeb 81%);box-shadow:0 14px 20px rgba(140,168,227,.24)}.hero-task:before{content:"";position:absolute;inset:0;background:linear-gradient(110deg,rgba(255,255,255,.16),transparent 55%)}.hero-copy{position:relative;z-index:2;width:100%}.hero-chip{display:inline-flex;padding:7px 14px;border-radius:15px;background:rgba(255,255,255,.78);color:#4f63f6;font-size:11px;font-weight:700}.hero-task h2{margin:14px 0 7px;font-size:25px;color:#25335f}.hero-task p{margin:0;color:#55648d;font-size:12px}.hero-divider{height:1px;margin:14px 0 10px;background:rgba(255,255,255,.82)}.hero-meta{display:flex;align-items:center;gap:30px;margin:0 0 10px}.hero-meta>strong{font-size:42px;line-height:1;color:#25335f}.hero-meta>span{font-size:12px;color:#55648d}.hero-meta>div{display:grid;gap:4px}.hero-meta b{font-size:13px}.hero-meta small{color:#55648d;font-size:10px}.hero-reason{display:grid;gap:4px;padding:9px 14px;border-radius:16px;background:rgba(255,255,255,.45);font-size:11px!important}.hero-actions{display:flex;gap:33px;margin-top:9px}.hero-actions button{height:39px;border:0;border-radius:15px;font-weight:800;cursor:pointer}.start-button{width:201px;background:rgba(255,255,255,.92);color:#4f63f6}.start-button:disabled{opacity:.55;cursor:not-allowed}.ghost-button{width:110px;background:rgba(255,255,255,.38);color:#25335f}
-.settings-card{height:330px;padding:20px 18px;display:grid;align-content:start;gap:12px;border:0;border-radius:24px;background:#fff;box-shadow:0 8px 18px rgba(52,71,173,.08)}.settings-title h2{margin:0;font-size:16px}.settings-title p{margin:4px 0 0;color:#7b88aa;font-size:11px}.settings-card label{display:grid;gap:5px;color:#596387;font-size:10px;font-weight:600}.settings-card input{width:100%;height:36px;border:1px solid #e1e6f6;border-radius:12px;padding:0 12px;background:#f7f9ff;color:#172052;font:inherit}.settings-card .input-example{margin-top:-2px;color:#99a2bd;font-size:9px;font-weight:500}.generate-button{height:40px;border:0;border-radius:14px;background:linear-gradient(90deg,#28c7df,#7657f6);color:white;font-size:12px;font-weight:800;cursor:pointer}
+.settings-card{height:330px;padding:20px 18px;display:grid;align-content:start;gap:12px;border:0;border-radius:24px;background:#fff;box-shadow:0 8px 18px rgba(52,71,173,.08)}.settings-title h2{margin:0;font-size:16px}.settings-title p{margin:4px 0 0;color:#7b88aa;font-size:11px}.settings-card label{display:grid;gap:5px;color:#596387;font-size:10px;font-weight:600}.settings-card input{width:100%;height:36px;border:1px solid #e1e6f6;border-radius:12px;padding:0 12px;background:#f7f9ff;color:#172052;font:inherit}.generate-button{height:40px;border:0;border-radius:14px;background:linear-gradient(90deg,#28c7df,#7657f6);color:white;font-size:12px;font-weight:800;cursor:pointer}
 .bottom-row{display:grid;grid-template-columns:540px 262px;gap:18px}.timeline-panel,.help-panel{padding:22px;border:1px solid rgba(255,255,255,.82);border-radius:25px;background:rgba(255,255,255,.38);box-shadow:0 12px 32px rgba(66,82,148,.07)}.panel-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.panel-heading h2{margin:0;font-size:18px}.panel-heading>span{padding:7px 12px;border-radius:16px;background:#eef1ff;color:#64719b;font-size:10px}.preview-label{margin:-7px 0 10px;color:#99a2bd;font-size:9px}.timeline-list{position:relative;display:grid;gap:12px;padding-left:21px}.timeline-list:before{content:"";position:absolute;left:5px;top:24px;bottom:24px;border-left:2px dashed #ccd6ea}.glass-task{position:relative;min-height:76px;padding:15px 46px 14px 17px;display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid rgba(255,255,255,.94);border-radius:20px;background:linear-gradient(118deg,rgba(255,255,255,.79),rgba(242,247,255,.52));box-shadow:inset 0 1px 0 rgba(255,255,255,.96),0 9px 22px rgba(76,91,151,.08);backdrop-filter:blur(18px) saturate(125%)}.glass-task:after{content:"";position:absolute;inset:1px;border-radius:19px;background:linear-gradient(120deg,rgba(255,255,255,.38),transparent 42%);pointer-events:none}.timeline-dot{position:absolute;z-index:2;left:-24px;top:30px;width:12px;height:12px;border:3px solid #f6f8ff;border-radius:50%;background:#4f7bf5;box-shadow:0 0 0 1px rgba(214,222,240,.8)}.task-copy{position:relative;z-index:1;min-width:0}.task-copy h3{margin:0 0 8px;font-size:13px}.task-copy p{margin:0;color:#8491b3;font-size:9px}.task-chip{position:relative;z-index:1;flex:0 0 auto;padding:7px 11px;border-radius:15px;background:#eaf1ff;color:#4e73e7;font-size:9px;font-weight:800}.task-open{position:absolute;z-index:3;right:13px;bottom:9px;border:0;background:transparent;color:#6b78a0;cursor:pointer}.glass-task.completed .timeline-dot{background:#25b98e}.glass-task.completed .task-copy h3,.glass-task.completed .task-copy p{color:#a8b2ca}.glass-task.completed .task-chip{background:#e7f8f3;color:#36a887}.glass-task.deferred .timeline-dot{background:#ff8a34}.glass-task.deferred .task-chip{background:#fff0e4;color:#f28037}
 .help-panel{padding:22px 18px}.help-heading{margin-bottom:13px}.help-heading p{margin:4px 0 0;color:#96a0bc;font-size:9px}.glass-help{width:100%;height:56px;margin-bottom:10px;padding:0 15px;display:grid;grid-template-columns:25px 1fr auto;align-items:center;gap:9px;border:1px solid rgba(255,255,255,.8);border-radius:18px;text-align:left;font-weight:800;box-shadow:inset 0 1px 0 rgba(255,255,255,.84),0 8px 18px rgba(73,94,158,.07);backdrop-filter:blur(17px);cursor:pointer}.glass-help b{font-size:20px}.glass-help i{font-style:normal;opacity:.55}.glass-help.cyan{color:#20b9d4;background:linear-gradient(105deg,rgba(217,249,252,.83),rgba(235,252,255,.54))}.glass-help.violet{color:#7657f6;background:linear-gradient(105deg,rgba(236,230,255,.87),rgba(246,242,255,.58))}.glass-help.rose{color:#fa7295;background:linear-gradient(105deg,rgba(255,234,241,.88),rgba(255,245,248,.55))}.health-note{display:grid;gap:4px;margin-top:5px;padding:12px 14px;border-radius:16px;background:linear-gradient(110deg,#edf7ff,#efedff);font-size:10px}.health-note span{color:#7380a4;font-size:9px}
 .feedback-panel{margin-top:18px;padding:18px 20px;display:grid;grid-template-columns:1fr 1.4fr auto;align-items:center;gap:14px;border-radius:20px;background:rgba(255,255,255,.72);box-shadow:0 12px 28px rgba(65,82,150,.09)}.feedback-panel p{margin:0;color:#5265e8;font-size:9px;font-weight:900}.feedback-panel h3{margin:4px 0 0;font-size:13px}.feedback-panel input{height:38px;border:1px solid #dde3f3;border-radius:11px;padding:0 11px}.feedback-panel button{height:38px;border:0;border-radius:11px;padding:0 15px;background:#596bf0;color:#fff;font-weight:800}
@@ -310,8 +351,8 @@ function dueText(task: Task) {
 .empty-timeline{display:grid;place-items:center;height:170px;margin:0;color:#98a2bd;font-size:11px}
 .heading-actions{gap:7px}.task-tools{display:flex;gap:5px}.heading-actions .task-tools button{height:30px;padding:0 9px;box-shadow:none;font-size:9px}.heading-actions .task-tools .import-tool{background:linear-gradient(90deg,#54dde9,#7c73f3)}.heading-actions .task-tools .add-tool{border-color:#cbd4fa;background:#f3f5ff;color:#596bf0}.heading-actions .task-tools .delete-tool{border-color:#f1d9df;background:#fff5f7;color:#d96179}.heading-actions .task-tools .delete-tool.active{background:#e7667f;color:#fff}.heading-actions .task-tools button:disabled{opacity:.42;cursor:not-allowed}.task-card-actions .task-delete{width:auto;padding:0 8px;background:#fff0f3;color:#d95c76;font-size:9px;font-weight:800}.task-card-actions .task-delete:hover{background:#ffe3e9;color:#c94560}
 .task-card-actions.deleting{top:50%;right:14px;bottom:auto;transform:translateY(-50%)}.task-card-actions.deleting .task-delete{height:32px;padding:0 12px;border:1px solid #ffdbe3;border-radius:12px;font-size:10px}.glass-task.delete-state{padding-right:72px}
-.hero-task,.settings-card{height:390px}.settings-card{padding:20px 18px;gap:10px}.settings-card input{height:36px}.settings-card .generate-button{height:40px;margin-top:2px}
+.hero-task{height:390px}.settings-card{height:auto;min-height:390px;padding:20px 18px;gap:10px;grid-template-rows:auto repeat(4,auto) minmax(40px,1fr)}.settings-card input{height:36px}.settings-card .generate-button{height:40px;margin-top:2px;align-self:end}
 .hero-copy{height:100%;display:grid;grid-template-rows:auto auto auto 1px auto auto auto;align-content:space-between}.hero-task h2{margin:0}.hero-divider{margin:0}.hero-meta{margin:0}.hero-reason{margin:0!important}.hero-actions{width:100%;margin:0;justify-content:center}.hero-actions .start-button{width:min(300px,68%)}
-@media(max-width:1100px){.today-page{width:100%}.plan-row,.bottom-row{grid-template-columns:minmax(0,1fr)}.settings-card{height:auto}.hero-task{min-height:278px}.timeline-panel,.help-panel{width:100%}}
+@media(max-width:1100px){.today-page{width:100%}.plan-row,.bottom-row{grid-template-columns:minmax(0,1fr)}.settings-card{height:auto;min-height:0;grid-template-rows:none}.hero-task{min-height:278px}.timeline-panel,.help-panel{width:100%}}
 @media(max-width:760px){.today-header{height:auto;margin-bottom:18px}.today-header h1{font-size:23px}.sync-state{display:none}.status-strip{height:auto;grid-template-columns:repeat(2,1fr);gap:14px;padding:14px}.status-strip>div{border:0;padding:0}.hero-task{padding:22px;min-height:330px}.hero-copy{width:100%}.hero-orbit{right:25px;top:145px;width:105px;height:105px}.hero-reason{left:22px;right:auto;width:200px}.bottom-row{grid-template-columns:1fr}.timeline-panel{padding:18px 14px}.glass-task{padding-right:36px}.feedback-panel{grid-template-columns:1fr}.panel-heading h2{font-size:16px}}
 </style>

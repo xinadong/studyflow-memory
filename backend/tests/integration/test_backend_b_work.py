@@ -94,11 +94,14 @@ class BackendBWorkTests(unittest.TestCase):
         updated = self.client.patch(f"/memories/{memory_id}", json={"content": "默认任务时长 15 分钟"})
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json()["content"], "默认任务时长 15 分钟")
+        self.assertNotEqual(updated.json()["id"], memory_id)
+        self.assertEqual(self.client.get(f"/memories/{memory_id}").json()["confirmation_status"], "archived")
 
-        deleted = self.client.delete(f"/memories/{memory_id}")
+        deleted = self.client.delete(f"/memories/{updated.json()['id']}")
         self.assertEqual(deleted.status_code, 204)
         hidden = self.client.get("/memories", params={"user_id": "u1", "active": "true"})
-        self.assertEqual(hidden.json()["total"], 0)
+        self.assertEqual(hidden.json()["total"], 1)
+        self.assertEqual(hidden.json()["items"][0]["confirmation_status"], "archived")
 
     def test_memory_route_rejects_direct_knowledge_state_creation(self):
         response = self.client.post("/memories", json={

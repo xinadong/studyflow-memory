@@ -17,6 +17,10 @@ def _to_entity(record: MemoryRecord) -> Memory:
         user_id=record.user_id,
         memory_type=MemoryType(record.memory_type),
         course=record.course,
+        scope=record.scope,
+        preferred_minutes=record.preferred_minutes, max_minutes=record.max_minutes,
+        duration_source=record.duration_source, replaced_by_id=record.replaced_by_id,
+        supersedes_id=record.supersedes_id,
         task_type=record.task_type,
         knowledge_point=record.knowledge_point,
         block_type=BlockType(record.block_type) if record.block_type else None,
@@ -36,6 +40,12 @@ def _apply_entity(record: MemoryRecord, memory: Memory) -> None:
     record.user_id = memory.user_id
     record.memory_type = memory.memory_type.value
     record.course = memory.course
+    record.scope = memory.scope
+    record.preferred_minutes = memory.preferred_minutes
+    record.max_minutes = memory.max_minutes
+    record.duration_source = memory.duration_source
+    record.replaced_by_id = memory.replaced_by_id
+    record.supersedes_id = memory.supersedes_id
     record.task_type = memory.task_type
     record.knowledge_point = memory.knowledge_point
     record.block_type = memory.block_type.value if memory.block_type else None

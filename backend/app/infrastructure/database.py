@@ -34,7 +34,51 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
         _upgrade_agent_runs_schema(connection)
+        _upgrade_tasks_schema(connection)
+        _upgrade_memory_scope(connection)
+        _upgrade_duration_schema(connection)
         _cleanup_memory_scope(connection)
+
+
+def _upgrade_duration_schema(connection) -> None:
+    from sqlalchemy import text
+    from app.memory.durations import parse_duration
+    inspector = inspect(connection)
+    if "memories" not in inspector.get_table_names():
+        return
+    existing = {column["name"] for column in inspector.get_columns("memories")}
+    for name, kind in {"preferred_minutes": "INTEGER", "max_minutes": "INTEGER",
+                       "duration_source": "VARCHAR(16)", "replaced_by_id": "VARCHAR(32)",
+                       "supersedes_id": "VARCHAR(32)"}.items():
+        if name not in existing:
+            connection.exec_driver_sql(f"ALTER TABLE memories ADD COLUMN {name} {kind}")
+    rows = connection.execute(text("SELECT id, content FROM memories WHERE memory_type = 'task_preference' AND duration_source IS NULL")).all()
+    for row in rows:
+        preferred, maximum = parse_duration(row.content)
+        connection.execute(text("UPDATE memories SET preferred_minutes=:p, max_minutes=:m, duration_source=:s WHERE id=:id"),
+                           {"p": preferred, "m": maximum, "s": "parsed" if preferred or maximum else "unresolved", "id": row.id})
+
+
+def _upgrade_memory_scope(connection) -> None:
+    inspector = inspect(connection)
+    if "memories" not in inspector.get_table_names():
+        return
+    if "scope" not in {column["name"] for column in inspector.get_columns("memories")}:
+        connection.exec_driver_sql("ALTER TABLE memories ADD COLUMN scope VARCHAR(16)")
+    # Old records keep their original course / knowledge-point boundary.
+    connection.exec_driver_sql(
+        "UPDATE memories SET scope = CASE WHEN knowledge_point IS NOT NULL "
+        "THEN 'knowledge_point' ELSE 'course' END WHERE scope IS NULL"
+    )
+
+
+def _upgrade_tasks_schema(connection) -> None:
+    """Preserve existing SQLite tasks while adding review scheduling."""
+    inspector = inspect(connection)
+    if "tasks" in inspector.get_table_names():
+        columns = {column["name"] for column in inspector.get_columns("tasks")}
+        if "due_at" not in columns:
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN due_at DATETIME")
 
 
 def _upgrade_agent_runs_schema(connection) -> None:

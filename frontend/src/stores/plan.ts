@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { BlockType, PlanResponse, Task, TaskStatus } from '../types'
+import { createTask, deleteTask, listTasks, updateTaskStatus } from '../services/tasks'
 
 const saved = sessionStorage.getItem('studyflow-plan')
 const savedStatuses = sessionStorage.getItem('studyflow-plan-statuses')
@@ -17,6 +18,8 @@ export const usePlanStore = defineStore('plan', () => {
   const statuses = ref<Record<string, TaskStatus>>(savedStatuses ? JSON.parse(savedStatuses) : {})
   const reviewTasks = ref<Task[]>(savedReviews ? JSON.parse(savedReviews) : [])
   const localAdjustment = ref(savedAdjustment || '')
+  const persistedIds = new Set<string>()
+  let loadVersion = 0
   const sameLocalDay = (left: Date, right: Date) => left.getFullYear() === right.getFullYear()
     && left.getMonth() === right.getMonth() && left.getDate() === right.getDate()
   const misplacedReviews = (plan.value?.tasks ?? []).filter(task => task.task_type === 'review'
@@ -43,27 +46,62 @@ export const usePlanStore = defineStore('plan', () => {
     : sessionStorage.removeItem('studyflow-plan-adjustment'))
   function setPlan(value: PlanResponse) {
     plan.value = value
-    statuses.value = Object.fromEntries(value.tasks.map(task => [task.id, 'pending']))
+    statuses.value = { ...statuses.value, ...Object.fromEntries(value.tasks.map(task => [task.id, statuses.value[task.id] || 'pending'])) }
+    value.tasks.filter(task => !task.id.startsWith('imported-') && !task.id.startsWith('preview-'))
+      .forEach(task => persistedIds.add(task.id))
+  }
+  async function loadTasks(userId: string) {
+    const version = ++loadVersion
+    const result = await listTasks(userId)
+    if (version !== loadVersion) return
+    const items = result.items
+    persistedIds.clear()
+    items.forEach(task => persistedIds.add(task.id))
+    statuses.value = Object.fromEntries(items.map(task => [task.id, task.status]))
+    reviewTasks.value = items.filter(task => task.task_type === 'review')
+    const visible = items.filter(task => task.task_type !== 'review'
+      || (task.due_at && new Date(task.due_at).getTime() <= new Date().setHours(23, 59, 59, 999)))
+    plan.value = visible.length ? {
+      tasks: visible, explanation: '已恢复保存的学习任务与完成状态。', metrics: {},
+      retrieved_memory_ids: [], used_memory_ids: [], candidate_memory_ids: [],
+    } : null
+    localAdjustment.value = ''
+  }
+  async function saveTask(userId: string, task: Task) {
+    const savedTask = await createTask(userId, task)
+    persistedIds.add(savedTask.id)
+    return savedTask
+  }
+  async function completeTask(userId: string, task: Task) {
+    if (task.id.startsWith('preview-')) throw new Error('这是示例任务，请先生成或添加真实任务。')
+    if (!persistedIds.has(task.id)) await saveTask(userId, task)
+    const savedTask = await updateTaskStatus(userId, task.id, 'completed')
+    statuses.value[task.id] = savedTask.status
+  }
+  async function removeSavedTask(userId: string, task: Task) {
+    if (persistedIds.has(task.id)) await deleteTask(userId, task.id)
+    persistedIds.delete(task.id)
+    reviewTasks.value = reviewTasks.value.filter(item => item.id !== task.id)
+    removeTask(task.id)
   }
   function addImportedTasks(tasks: Task[]) {
     if (!tasks.length) return
     if (!plan.value) {
       plan.value = {
-        tasks: [...previewTasks.value],
+        tasks: [],
         explanation: '已导入的任务会加入今日弹性任务流，可继续生成计划或直接开始。',
         metrics: {},
         retrieved_memory_ids: [],
         used_memory_ids: [],
         candidate_memory_ids: [],
       }
-      statuses.value = {
-        [previewTasks.value[0]?.id]: 'completed',
-        [previewTasks.value[1]?.id]: 'pending',
-        [previewTasks.value[2]?.id]: 'deferred',
-      }
     }
-    plan.value.tasks.push(...tasks)
-    tasks.forEach(task => { statuses.value[task.id] = 'pending' })
+    for (const task of tasks) {
+      const existing = plan.value.tasks.find(item => item.id === task.id)
+      if (existing) Object.assign(existing, task)
+      else plan.value.tasks.push(task)
+      statuses.value[task.id] ??= 'pending'
+    }
   }
   function removeTask(taskId: string) {
     if (!plan.value) {
@@ -74,10 +112,15 @@ export const usePlanStore = defineStore('plan', () => {
     delete statuses.value[taskId]
     if (!plan.value.tasks.length) plan.value = null
   }
-  function addReviewTask(task: Task, reason: string) {
+  async function addReviewTask(userId: string, task: Task, reason: string) {
+    task = await saveTask(userId, task)
     const existing = reviewTasks.value.find(item => item.id === task.id)
     if (existing) Object.assign(existing, task)
     else reviewTasks.value.push(task)
+    statuses.value[task.id] = 'pending'
+    if (task.due_at && new Date(task.due_at).getTime() <= new Date().setHours(23, 59, 59, 999)) {
+      if (!plan.value?.tasks.some(item => item.id === task.id)) addImportedTasks([task])
+    }
     localAdjustment.value = `伴学反馈已影响计划：已将「${task.knowledge_point}」复习加入 ${new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(task.due_at!))}。${reason}`
   }
   function applyRecoveryAdjustment(blockType: BlockType, taskId: string | undefined, action: string, adjustedRemainingMinutes?: number) {
@@ -113,5 +156,5 @@ export const usePlanStore = defineStore('plan', () => {
     }
     return localAdjustment.value
   }
-  return { plan, previewTasks, reviewTasks, statuses, localAdjustment, totalMinutes, setPlan, addImportedTasks, addReviewTask, removeTask, applyRecoveryAdjustment }
+  return { plan, previewTasks, reviewTasks, statuses, localAdjustment, totalMinutes, setPlan, addImportedTasks, addReviewTask, removeTask, applyRecoveryAdjustment, loadTasks, saveTask, completeTask, removeSavedTask }
 })

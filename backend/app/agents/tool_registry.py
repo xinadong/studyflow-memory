@@ -40,7 +40,7 @@ class UnderstandingQuestionArgs(BaseModel):
     knowledge_point: str = Field(min_length=1)
     level: Literal["recall", "relate", "transfer"] = "recall"
     example_first: bool = False
-    explanation_style: Literal["example_first", "definition_first", "diagram_first"] | None = None
+    explanation_style: Literal["example_first", "definition_first", "diagram_first", "analogy_first"] | None = None
 
 
 class RecoveryActionArgs(BaseModel):

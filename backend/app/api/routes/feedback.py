@@ -291,6 +291,8 @@ def create_feedback(
     ))
     memory = Memory(
         user_id=payload.user_id, memory_type=feedback_type,
+        scope=payload.scope,
+        preferred_minutes=payload.preferred_minutes, max_minutes=payload.max_minutes,
         course=payload.course, content=payload.content,
         task_type=payload.task_type, knowledge_point=payload.knowledge_point,
         block_type=block_type, source_feedback=feedback_id,
@@ -298,7 +300,8 @@ def create_feedback(
         confirmation_status=(ConfirmationStatus.CONFIRMED if explicit else ConfirmationStatus.PENDING),
     )
     try:
-        saved = repo.add(memory, commit=False)
+        from app.memory.versions import add_version
+        saved = add_version(repo, memory)
     except Exception:
         db.rollback()
         raise

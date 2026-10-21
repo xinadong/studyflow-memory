@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.domain.value_objects.memory_type import BlockType
+from app.schemas.memory import MemoryOut
 
 
 class ImportedTaskInput(BaseModel):
@@ -19,6 +20,7 @@ class PlanRequest(BaseModel):
     goal: str = Field(min_length=1)
     available_minutes: int = Field(ge=1, le=240)
     task_type: str = "study"
+    temporary_preference: str | None = Field(default=None, min_length=1, max_length=1000)
     knowledge_point: str | None = None
     imported_tasks: list[ImportedTaskInput] = Field(default_factory=list, max_length=50)
 
@@ -33,12 +35,19 @@ class TaskOut(BaseModel):
     due_at: datetime | None = None
 
 
+class MemoryEvidence(BaseModel):
+    memory: MemoryOut
+    decision: Literal["used", "retrieved_not_used", "pending"]
+    reason: str
+
+
 class PlanResponse(BaseModel):
     tasks: list[TaskOut]
     explanation: str
     retrieved_memory_ids: list[str]
     used_memory_ids: list[str]
     candidate_memory_ids: list[str]
+    memory_evidence: list[MemoryEvidence] = Field(default_factory=list)
     metrics: dict[str, int]
 
 
@@ -69,6 +78,7 @@ class UnderstandingCheckResponse(BaseModel):
     retrieved_memory_ids: list[str]
     used_memory_ids: list[str]
     candidate_memory_ids: list[str]
+    memory_evidence: list[MemoryEvidence] = Field(default_factory=list)
     metrics: dict[str, int]
 
 
@@ -94,4 +104,5 @@ class RecoveryResponse(BaseModel):
     retrieved_memory_ids: list[str]
     used_memory_ids: list[str]
     candidate_memory_ids: list[str]
+    memory_evidence: list[MemoryEvidence] = Field(default_factory=list)
     metrics: dict[str, int]

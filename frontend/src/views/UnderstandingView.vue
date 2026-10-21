@@ -96,7 +96,7 @@ function nextLevel(){const i=levels.indexOf(level.value);selectLevel(levels[Math
     <LoadingState v-if="busy" text="正在结合课程材料与解释偏好生成问题…"/>
     <ErrorNotice v-if="error" :message="error" @retry="requestQuestion(Boolean(answer))"/>
     <UnderstandingQuestion v-if="result" :result="result" :answer="answer" :busy="busy" @update:answer="answer=$event" @submit="requestQuestion(true)"/>
-    <MemoryReference v-if="result" :retrieved="result.retrieved_memory_ids" :used="result.used_memory_ids" :candidates="result.candidate_memory_ids"/>
+    <MemoryReference v-if="result" :retrieved="result.retrieved_memory_ids" :used="result.used_memory_ids" :candidates="result.candidate_memory_ids" :evidence="result.memory_evidence"/>
     <div v-if="result?.assessed_level" class="finish-row card panel"><div><span class="chip success">本轮形成性反馈已生成</span><h3>回答证据将用于更新相关知识状态</h3><p class="muted small">这不是严格的掌握证明，也不会跨主题推断你的能力。</p></div><button class="btn btn-primary" :disabled="level==='transfer'" @click="nextLevel">下一层检验 →</button></div>
   </div>
 </section>

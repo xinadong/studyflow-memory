@@ -46,15 +46,13 @@ def _prompt(name: str) -> str:
 
 
 def _minutes(content: str) -> int | None:
-    match = re.search(r"(\d+)\s*分钟", content)
-    if not match:
-        return None
-    value = int(match.group(1))
-    return value if 1 <= value <= 240 else None
+    from app.memory.durations import parse_duration
+    return parse_duration(content)[0]
 
 
 def _explanation_style(content: str) -> str | None:
     explicit_markers = {
+        "analogy_first": ("类比优先", "先看类比", "先用类比", "类比提示"),
         "example_first": (
             "示例优先", "例子优先", "先看示例", "先给我看示例",
             "先看例子", "先给我看例子", "先看案例",
@@ -353,11 +351,26 @@ def _knowledge_prerequisite_reminder(
     return f"前置提醒：先回顾{knowledge_point}（上次形成性理解层级为{level}）。"
 
 
-def _memory_payload(result) -> dict[str, list[str]]:
+def _memory_payload(result, reasons=None) -> dict:
+    from app.schemas.memory import MemoryOut
+    reasons = reasons or {}
+    used = set(result.used_memory_ids)
+    candidates = set(result.candidate_memory_ids)
+    evidence = []
+    for memory in result.retrieved:
+        decision = "used" if memory.id in used else "pending" if memory.id in candidates else "retrieved_not_used"
+        reason = reasons.get(memory.id) or {
+            "used": "本轮采用了这条已确认记忆。",
+            "pending": "尚待用户确认，本轮未采用。",
+            "retrieved_not_used": "已检索到，但本轮采用了其他偏好或尚未满足使用条件。",
+        }[decision]
+        evidence.append({"memory": MemoryOut.model_validate(memory).model_dump(mode="json"),
+                         "decision": decision, "reason": reason})
     return {
         "retrieved_memory_ids": result.retrieved_memory_ids,
         "used_memory_ids": result.used_memory_ids,
         "candidate_memory_ids": result.candidate_memory_ids,
+        "memory_evidence": evidence,
     }
 
 
@@ -388,11 +401,12 @@ class AgentService:
     def _retrieve(self, filters: MemoryFilter):
         scoped = self.repository.list(MemoryFilter(
             user_id=filters.user_id,
-            course=filters.course,
             memory_type=filters.memory_type,
         ))
 
         def matches(memory) -> bool:
+            if memory.scope != "global" and memory.course != filters.course:
+                return False
             if filters.task_type is not None and memory.task_type not in (None, filters.task_type):
                 return False
             if filters.knowledge_point is None:
@@ -627,6 +641,7 @@ class AgentService:
         persist_task: bool = True,
         operation: str = "plan",
         imported_tasks: list[dict[str, Any]] | None = None,
+        temporary_preference: str | None = None,
     ) -> dict[str, Any]:
         imported_tasks = imported_tasks or []
         ordered_imports = sorted(imported_tasks, key=lambda item: item["due_at"].timestamp())
@@ -654,11 +669,21 @@ class AgentService:
         memories = merge_retrieval_results(task_memories, review_memories)
         retrieval_ms = int((perf_counter() - retrieval_started) * 1000)
         self._last_retrieval_ms = retrieval_ms
-        preferred = next((
-            _minutes(memory.content)
-            for memory in memories.used
-            if memory.memory_type == MemoryType.TASK_PREFERENCE and _minutes(memory.content)
-        ), None)
+        from app.memory.durations import parse_duration
+        duration_memory = next((m for m in memories.used if m.memory_type == MemoryType.TASK_PREFERENCE
+                                and m.preferred_minutes is not None), None)
+        maximum_memory = next((m for m in memories.used if m.memory_type == MemoryType.TASK_PREFERENCE
+                               and m.max_minutes is not None), None)
+        raw_preferred = duration_memory.preferred_minutes if duration_memory else None
+        maximum = maximum_memory.max_minutes if maximum_memory else None
+        if temporary_preference:
+            raw_preferred, maximum = parse_duration(temporary_preference)
+        preferred = min(raw_preferred or 25, maximum) if maximum else raw_preferred
+        maximum_binding = maximum is not None and maximum < min(available_minutes, raw_preferred or 25)
+        duration_used_ids = [] if temporary_preference else (
+            ([duration_memory.id] if duration_memory else [])
+            + ([maximum_memory.id] if maximum_memory and maximum_binding else [])
+        )
         due_review = next((
             memory for memory in memories.used
             if memory.memory_type == MemoryType.REVIEW_SCHEDULE
@@ -670,10 +695,7 @@ class AgentService:
         review_reminder_text = review_reminder(due_review.content) if due_review else None
         memories = select_used_memories(
             memories,
-            [
-                memory.id for memory in memories.used
-                if memory.memory_type == MemoryType.TASK_PREFERENCE and _minutes(memory.content)
-            ] + ([due_review.id] if due_review else []),
+            duration_used_ids + ([due_review.id] if due_review else []),
         )
         self._last_memory_result = memories
         learning_state = execute_tool(
@@ -710,6 +732,8 @@ class AgentService:
             user_payload={
                 "user_id": user_id, "course": course, "goal": goal,
                 "available_minutes": available_minutes, "task_type": task_type,
+                "temporary_preference": temporary_preference,
+                "duration_constraints": {"preferred_minutes": raw_preferred, "max_minutes": maximum},
                 "knowledge_point": knowledge_point,
                 "confirmed_memories": [m.content for m in memories.used],
                 "learning_state": learning_state,
@@ -741,6 +765,7 @@ class AgentService:
                 description=task["description"], task_type=task_type,
                 knowledge_point=knowledge_point, duration_minutes=task["duration_minutes"],
                 status="planned", created_at=datetime.now(timezone.utc),
+                due_at=selected_import["due_at"] if selected_import else None,
             ))
         try:
             metrics = self._record_success(
@@ -753,18 +778,33 @@ class AgentService:
             self.session.rollback()
             raise
         explanation = final["explanation"]
-        if preferred is not None:
-            actual_minutes = task["duration_minutes"]
-            explanation = _remove_duration_explanation(explanation)
-            if actual_minutes != preferred:
-                explanation = (
-                    f"{explanation} 你通常偏好{preferred}分钟，但本次只有{available_minutes}分钟可用，"
-                    f"因此安排为{actual_minutes}分钟。"
-                ).strip()
+        if temporary_preference:
+            explanation = f"{explanation} 本次按你的临时偏好安排，未保存为长期记忆。"
+        duration_reasons = {}
+        actual_minutes = task["duration_minutes"]
+        for memory in memories.retrieved:
+            if memory.memory_type != MemoryType.TASK_PREFERENCE:
+                continue
+            if memory.id in memories.candidate_memory_ids:
+                continue
+            if temporary_preference:
+                duration_reasons[memory.id] = "本次临时选择优先，未采用这条长期时长偏好。"
+            elif memory.id in duration_used_ids:
+                parts = []
+                if duration_memory and memory.id == duration_memory.id:
+                    parts.append(f"本次使用了你确认的首选{raw_preferred}分钟偏好")
+                if maximum_memory and memory.id == maximum_memory.id and maximum_binding:
+                    parts.append(f"采用了你确认的最多{maximum}分钟上限")
+                duration_reasons[memory.id] = "；".join(parts) + f"，结合可用{available_minutes}分钟，实际安排{actual_minutes}分钟。"
+            elif not memory.preferred_minutes and not memory.max_minutes:
+                duration_reasons[memory.id] = "文本尚未形成明确时长字段，请在个人中心补充首选或上限。"
+            elif maximum_memory and memory.id == maximum_memory.id:
+                duration_reasons[memory.id] = f"已检索到最多{maximum}分钟上限，但本轮时长未触及上限，未改变安排。"
             else:
-                explanation = (
-                    f"{explanation} 根据你已确认的任务时长偏好，本次按{actual_minutes}分钟拆分。"
-                ).strip()
+                duration_reasons[memory.id] = "本轮已优先采用范围更具体或更新的时长偏好。"
+        if duration_used_ids:
+            explanation = _remove_duration_explanation(explanation)
+            explanation = (explanation + " " + " ".join(dict.fromkeys(duration_reasons[mid] for mid in duration_used_ids))).strip()
         if prerequisite_reminder and prerequisite_reminder not in explanation:
             explanation = f"{explanation} {prerequisite_reminder}"
         if review_reminder_text and not _contains_review_reminder(explanation, review_reminder_text):
@@ -772,7 +812,7 @@ class AgentService:
         return {
             "tasks": [task],
             "explanation": explanation,
-            **_memory_payload(memories),
+            **_memory_payload(memories, duration_reasons),
             "metrics": metrics,
         }
 
@@ -798,6 +838,11 @@ class AgentService:
             (None, None),
         )
         preferred_memory, explanation_style = preferred_explanation
+        if hint_preference:
+            # A request-local choice overrides saved explanation preferences.
+            preferred_memory = None
+            explanation_style = {"example": "example_first", "definition": "definition_first",
+                                 "diagram": "diagram_first", "analogy": "analogy_first"}.get(hint_preference)
         memories = select_used_memories(
             memories,
             [preferred_memory.id] if preferred_memory else [],

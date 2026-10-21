@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-08-31T21:05:34",
+  "total": 5,
+  "passed": 5,
+  "cases": [
+    {
+      "id": "review-classify",
+      "desc": "feedback「每2天复习一次 BFS」→ REVIEW_SCHEDULE",
+      "ok": true,
+      "detail": "memory_type=review_schedule",
+      "memory_type": "review_schedule"
+    },
+    {
+      "id": "review-due-reminder",
+      "desc": "created_at=2天前 → plan 同知识点出现「复习提醒」",
+      "ok": true,
+      "detail": "explanation 含「复习提醒」",
+      "used": 1
+    },
+    {
+      "id": "review-notdue",
+      "desc": "created_at=1天前 → plan 不含「复习提醒」",
+      "ok": true,
+      "detail": "未到期不提醒"
+    },
+    {
+      "id": "review-cross-kp",
+      "desc": "plan 不同知识点 → 不含「复习提醒」（knowledge_point 过滤）",
+      "ok": true,
+      "detail": "跨知识点不串"
+    },
+    {
+      "id": "review-invalid-interval",
+      "desc": "「每0天复习」无效间隔 → 不提醒",
+      "ok": true,
+      "detail": "memory_type=review_schedule，不提醒",
+      "memory_type": "review_schedule"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import agent, evaluation, feedback, memories, metrics
+from app.api.routes import agent, evaluation, feedback, memories, metrics, tasks
 from app.infrastructure.llm.adapter import LLMCallError
 from app.infrastructure.database import init_db
 
@@ -52,6 +52,7 @@ app.include_router(feedback.router, tags=["feedback"])
 app.include_router(memories.router, tags=["memories"])
 app.include_router(evaluation.router, tags=["evaluation"])
 app.include_router(metrics.router, tags=["metrics"])
+app.include_router(tasks.router, tags=["tasks"])
 
 
 @app.get("/health")

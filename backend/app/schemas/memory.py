@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.preference import ScopedMemoryInput, MemoryScope
+from app.schemas.duration import DurationFields
 
 from app.domain.value_objects.memory_type import (
     BlockType,
@@ -13,7 +15,7 @@ from app.domain.value_objects.memory_type import (
 )
 
 
-class MemoryOut(BaseModel):
+class MemoryOut(DurationFields):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
@@ -31,12 +33,16 @@ class MemoryOut(BaseModel):
     last_used_at: datetime | None
     use_count: int
     active: bool
+    scope: MemoryScope
+    duration_source: str | None = None
+    replaced_by_id: str | None = None
+    supersedes_id: str | None = None
 
 
-class MemoryCreate(BaseModel):
+class MemoryCreate(ScopedMemoryInput, DurationFields):
     user_id: str
     memory_type: MemoryType
-    course: str
+    course: str = ""
     content: str
     task_type: str | None = None
     knowledge_point: str | None = None
@@ -46,7 +52,7 @@ class MemoryCreate(BaseModel):
     confirmation_status: ConfirmationStatus = ConfirmationStatus.PENDING
 
 
-class MemoryUpdate(BaseModel):
+class MemoryUpdate(DurationFields):
     content: str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     confirmation_status: ConfirmationStatus | None = None

@@ -10,6 +10,7 @@ from app.domain.value_objects.memory_type import BlockType, ConfirmationStatus, 
 from app.infrastructure.repositories.sqlalchemy_memory_repository import SqlAlchemyMemoryRepository
 from app.memory.policy import soft_delete_memory
 from app.schemas.memory import MemoryCreate, MemoryList, MemoryOut, MemoryUpdate
+from app.memory.versions import add_version, update_version
 
 router = APIRouter()
 
@@ -29,7 +30,9 @@ def create_memory(payload: MemoryCreate, repo: SqlAlchemyMemoryRepository = Depe
             },
         )
     memory = Memory(**payload.model_dump())
-    return _out(repo.add(memory))
+    saved = add_version(repo, memory)
+    repo.session.commit()
+    return _out(saved)
 
 
 @router.get("/memories", response_model=MemoryList)
@@ -62,9 +65,14 @@ def get_memory(memory_id: str, repo: SqlAlchemyMemoryRepository = Depends(get_me
 
 @router.patch("/memories/{memory_id}", response_model=MemoryOut)
 def update_memory(memory_id: str, payload: MemoryUpdate, repo: SqlAlchemyMemoryRepository = Depends(get_memory_repository)):
-    memory = repo.update(memory_id, DomainMemoryUpdate(**payload.model_dump(exclude_unset=True)))
+    try:
+        memory = update_version(repo, memory_id, payload.model_dump(exclude_unset=True))
+    except ValueError as error:
+        repo.session.rollback()
+        raise HTTPException(422, str(error)) from error
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found")
+    repo.session.commit()
     return _out(memory)
 
 

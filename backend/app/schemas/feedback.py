@@ -3,11 +3,13 @@
 from pydantic import BaseModel, Field, field_validator
 
 from app.domain.value_objects.memory_type import BlockType, MemoryType
+from app.schemas.preference import ScopedMemoryInput
+from app.schemas.duration import DurationFields
 
 
-class FeedbackCreate(BaseModel):
+class FeedbackCreate(ScopedMemoryInput, DurationFields):
     user_id: str
-    course: str
+    course: str = ""
     feedback_type: MemoryType | None = None
     content: str = Field(min_length=1)
     explicit: bool | None = None

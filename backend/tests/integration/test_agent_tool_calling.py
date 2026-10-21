@@ -839,7 +839,7 @@ class AgentToolCallingTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json()["explanation"],
-            "根据你已确认的任务时长偏好，本次按20分钟拆分。",
+            "本次使用了你确认的首选20分钟偏好，结合可用25分钟，实际安排20分钟。",
         )
 
     def test_plan_overrides_contradictory_model_duration_explanation(self):
@@ -877,7 +877,7 @@ class AgentToolCallingTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["tasks"][0]["duration_minutes"], 20)
-        self.assertIn("安排为20分钟", response.json()["explanation"])
+        self.assertIn("实际安排20分钟", response.json()["explanation"])
         self.assertNotIn("本次按30分钟拆分", response.json()["explanation"])
 
     def test_success_trace_failure_rolls_back_memory_usage(self):

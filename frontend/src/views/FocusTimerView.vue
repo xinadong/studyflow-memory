@@ -3,17 +3,22 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlanStore } from '../stores/plan'
 import { useSessionStore } from '../stores/session'
+import ErrorNotice from '../components/ErrorNotice.vue'
+import { errorMessage } from '../services/api'
 
 const router = useRouter()
 const session = useSessionStore()
 const plans = usePlanStore()
 const task = computed(() => session.selectedTask)
+const isPreview = computed(() => task.value?.id.startsWith('preview-') ?? false)
 const resumableSeconds = task.value && session.focusTaskId === task.value.id ? session.focusRemainingSeconds : null
 const remainingSeconds = ref(resumableSeconds ?? Math.max(1, task.value?.duration_minutes || 25) * 60)
 const running = ref(true)
 const showMoreTime = ref(false)
 const extraMinutes = ref<number | null>(null)
 const timeError = ref('')
+const saving = ref(false)
+const saveError = ref('')
 let timer: number | undefined
 
 const timeText = computed(() => {
@@ -55,11 +60,24 @@ function closeMoreTime() {
   showMoreTime.value = false
   running.value = true
 }
-function finishEarly() {
-  if (task.value) plans.statuses[task.value.id] = 'completed'
-  session.clearFocusProgress()
-  session.selectedTask = null
-  router.push('/today')
+async function finishEarly() {
+  if (!task.value || saving.value) return
+  if (isPreview.value) {
+    session.clearFocusProgress()
+    session.selectedTask = null
+    await router.push('/today')
+    return
+  }
+  saving.value = true
+  saveError.value = ''
+  running.value = false
+  try {
+    await plans.completeTask(session.userId, { ...task.value, course: task.value.course || session.course })
+    session.clearFocusProgress()
+    session.selectedTask = null
+    await router.push('/today')
+  } catch (cause) { saveError.value = errorMessage(cause) }
+  finally { saving.value = false }
 }
 function releaseThought() {
   if (task.value) session.setFocusProgress(task.value.id, remainingSeconds.value)
@@ -88,10 +106,16 @@ onBeforeUnmount(() => {
       <div class="timer-orbit"><div class="timer-core"><small>{{ remainingSeconds === 0 ? '本轮时间已到' : '专注倒计时' }}</small><strong>{{ timeText }}</strong><span>{{ running ? '保持当前节奏' : '计时已暂停' }}</span></div></div>
       <div class="progress-track"><i :style="{ width: `${progress}%` }" /></div>
       <p>任务预计 {{ task.duration_minutes }} 分钟 · 离开此页会暂停并保留当前倒计时</p>
+      <div v-if="isPreview" class="preview-note" role="note">
+        <span class="preview-note-icon" aria-hidden="true">✦</span>
+        <div><strong>正在体验示例任务</strong><span>体验记录不会保存，创建自己的任务后即可记录学习进度。</span></div>
+        <button type="button" @click="router.push('/today')">去创建任务 <span aria-hidden="true">→</span></button>
+      </div>
+      <ErrorNotice v-if="saveError" class="focus-save-error" :message="saveError" @retry="finishEarly" />
       <div class="focus-actions">
-        <button type="button" class="more-time" @click="openMoreTime">时间不够</button>
-        <button type="button" class="finish-early" @click="finishEarly">提前完成</button>
-        <button type="button" class="release-thought" @click="releaseThought">✦ 杂念释放</button>
+        <button type="button" class="more-time" :disabled="saving" @click="openMoreTime">时间不够</button>
+        <button type="button" class="finish-early" :disabled="saving" @click="finishEarly">{{ isPreview ? '结束体验' : saving ? '正在保存…' : remainingSeconds === 0 ? '确认完成' : '提前完成' }}</button>
+        <button type="button" class="release-thought" :disabled="saving" @click="releaseThought">✦ 杂念释放</button>
       </div>
     </article>
 
@@ -109,5 +133,14 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.preview-note{display:flex;align-items:center;gap:12px;margin:0 0 18px;padding:14px 16px;border:1px solid rgba(255,255,255,.85);border-radius:18px;background:rgba(255,255,255,.48);text-align:left;color:#65749b}
+.preview-note-icon{display:grid;place-items:center;flex:0 0 32px;height:32px;border-radius:11px;background:rgba(111,126,239,.09);color:#7781d9;font-size:17px}
+.preview-note>div{display:grid;gap:4px;flex:1;min-width:0}
+.preview-note strong{font-size:12px;font-weight:700;color:#53648d}
+.preview-note>div>span{font-size:11px;line-height:1.65}
+.preview-note button{flex-shrink:0;padding:8px 0 8px 12px;border:0;background:transparent;color:#586bd5;font-size:12px;font-weight:700;cursor:pointer}
+.preview-note button:focus-visible{outline:2px solid #697cf3;outline-offset:4px;border-radius:6px}
+.focus-save-error{margin-bottom:18px;text-align:left}
+@media(max-width:520px){.preview-note{flex-wrap:wrap;gap:10px}.preview-note>div{flex-basis:calc(100% - 44px)}.preview-note button{margin-left:44px;padding:0}}
 .focus-page{width:820px;color:#172052}.focus-header{text-align:center;margin:18px 0 28px}.focus-header>span{color:#6379ee;font-size:11px;font-weight:900;letter-spacing:.12em}.focus-header h1{margin:8px 0 6px;font-size:30px}.focus-header p{margin:0;color:#7a86a7;font-size:13px}.timer-card{padding:34px 42px;border:1px solid rgba(255,255,255,.9);border-radius:34px;background:linear-gradient(135deg,rgba(215,249,252,.85),rgba(237,224,255,.82) 53%,rgba(218,228,255,.9));box-shadow:0 24px 60px rgba(80,100,180,.15);text-align:center}.timer-orbit{width:290px;height:290px;margin:0 auto 22px;padding:12px;border-radius:50%;background:conic-gradient(#51dce8,#747df5,#b77cf0,#51dce8);box-shadow:0 18px 42px rgba(101,121,221,.2)}.timer-core{height:100%;display:grid;place-content:center;gap:8px;border-radius:50%;background:rgba(250,252,255,.94);box-shadow:inset 0 0 30px rgba(93,120,226,.1)}.timer-core small{color:#6576d9;font-weight:800}.timer-core strong{font-size:62px;line-height:1;letter-spacing:-2px}.timer-core span{color:#8993ae;font-size:11px}.progress-track{height:7px;overflow:hidden;border-radius:7px;background:rgba(255,255,255,.7)}.progress-track i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#4edce9,#697cf3,#a478ef);transition:width 1s linear}.timer-card>p{margin:12px 0 24px;color:#7a86a7;font-size:11px}.focus-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.focus-actions button{height:48px;border:0;border-radius:16px;font-weight:900;cursor:pointer}.more-time{background:#fff;color:#5269df}.finish-early{background:linear-gradient(90deg,#52d9e6,#657ef1);color:#fff}.release-thought{background:#202b5c;color:#fff}.time-backdrop{position:fixed;z-index:1000;inset:0;display:grid;place-items:center;padding:20px;background:rgba(25,31,70,.3);backdrop-filter:blur(8px)}.time-dialog{position:relative;width:min(430px,100%);padding:28px;border-radius:26px;background:#fff;box-shadow:0 30px 80px rgba(35,47,110,.28);text-align:left}.time-dialog>span{color:#6477e8;font-size:10px;font-weight:900}.time-dialog h2{margin:7px 0 8px;font-size:22px}.time-dialog>p{color:#7a86a7;font-size:12px}.dialog-close{position:absolute;right:20px;top:18px;width:34px;height:34px;border:0;border-radius:50%;background:#eef1fa;color:#7782a0;font-size:20px}.time-dialog label{height:58px;margin:20px 0 8px;display:grid;grid-template-columns:1fr 64px;align-items:center;border:1px solid #dfe4f3;border-radius:16px;overflow:hidden}.time-dialog input{height:100%;min-width:0;padding:0 16px;border:0;outline:0;font-size:25px;font-weight:800}.time-dialog label b{color:#7480a0}.time-error{color:#d9506c!important}.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}.dialog-actions button{height:40px;padding:0 18px;border:0;border-radius:13px;background:#eef1f8;color:#697596;font-weight:800}.dialog-actions .continue-button{background:linear-gradient(90deg,#52d9e6,#7772ef);color:#fff}@media(max-width:760px){.focus-page{width:100%}.timer-card{padding:26px 18px}.timer-orbit{width:230px;height:230px}.timer-core strong{font-size:50px}.focus-actions{grid-template-columns:1fr}}
 </style>

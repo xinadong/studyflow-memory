@@ -9,6 +9,8 @@ export type ConfirmationStatus = 'pending' | 'confirmed' | 'rejected' | 'archive
 export type BlockType = 'time' | 'too_hard' | 'distraction' | 'fatigue'
 export type UnderstandingLevel = 'recall' | 'relate' | 'transfer'
 export type TaskStatus = 'pending' | 'active' | 'completed' | 'deferred'
+export type MemoryScope = 'global' | 'course' | 'knowledge_point'
+export type PreferencePersistence = 'once' | 'long_term'
 
 export interface Task {
   id: string
@@ -23,13 +25,21 @@ export interface Task {
 
 export interface ImportedTaskConstraint { title: string; due_at: string }
 
+export interface MemoryEvidence {
+  memory: MemoryItem
+  decision: 'used' | 'retrieved_not_used' | 'pending'
+  reason: string
+}
+
 export interface MemoryTrace {
+  memory_evidence?: MemoryEvidence[]
   retrieved_memory_ids: string[]
   used_memory_ids: string[]
   candidate_memory_ids: string[]
 }
 
 export interface PlanRequest {
+  temporary_preference?: string
   user_id: string
   course: string
   goal: string
@@ -95,6 +105,12 @@ export interface RecoveryResponse extends MemoryTrace {
 }
 
 export interface MemoryItem {
+  preferred_minutes?: number | null
+  max_minutes?: number | null
+  duration_source?: string | null
+  replaced_by_id?: string | null
+  supersedes_id?: string | null
+  scope?: MemoryScope
   id: string
   user_id: string
   memory_type: MemoryType
@@ -115,6 +131,9 @@ export interface MemoryItem {
 export interface MemoryList { items: MemoryItem[]; total: number }
 
 export interface FeedbackRequest {
+  preferred_minutes?: number | null
+  max_minutes?: number | null
+  scope?: MemoryScope
   user_id: string
   course: string
   feedback_type?: MemoryType

@@ -34,8 +34,23 @@ class Memory:
     created_at: datetime = field(default_factory=_utcnow)
     last_used_at: datetime | None = None
     use_count: int = 0
+    scope: str | None = None
+    preferred_minutes: int | None = None
+    max_minutes: int | None = None
+    duration_source: str | None = None
+    replaced_by_id: str | None = None
+    supersedes_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.memory_type == MemoryType.TASK_PREFERENCE and self.duration_source is None:
+            from app.memory.durations import parse_duration
+            if self.preferred_minutes is not None or self.max_minutes is not None:
+                self.duration_source = "structured"
+            else:
+                self.preferred_minutes, self.max_minutes = parse_duration(self.content)
+                self.duration_source = "parsed" if self.preferred_minutes or self.max_minutes else "unresolved"
+        if self.scope is None:
+            self.scope = "knowledge_point" if self.knowledge_point else "course"
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
         if self.use_count < 0:
             raise ValueError("use_count cannot be negative")

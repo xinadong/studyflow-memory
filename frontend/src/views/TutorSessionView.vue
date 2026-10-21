@@ -2,6 +2,10 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import ErrorNotice from '../components/ErrorNotice.vue'
+import PreferenceOptions from '../components/PreferenceOptions.vue'
+import MemoryReference from '../components/MemoryReference.vue'
+import { submitFeedback } from '../services/memories'
+import type { FeedbackRequest, PreferencePersistence, MemoryScope, MemoryTrace } from '../types'
 import { checkUnderstanding } from '../services/agent'
 import { errorMessage } from '../services/api'
 import { useSessionStore } from '../stores/session'
@@ -18,7 +22,18 @@ const busy = ref(false)
 const error = ref('')
 const thread = ref<HTMLElement | null>(null)
 const reviewDate = ref('')
+const hintPersistence = ref<PreferencePersistence>('once')
+const hintScope = ref<MemoryScope>('course')
+const hintMemoryError = ref('')
+const hintMemorySaved = ref(false)
+const hintMemorySaving = ref(false)
+const pendingHintSave = ref<FeedbackRequest | null>(null)
+const memoryTrace = ref<MemoryTrace | null>(null)
 const reviewAdded = ref(false)
+const reviewSaving = ref(false)
+const finishing = ref(false)
+const reviewError = ref('')
+const reviewTaskId = crypto.randomUUID()
 const showExitReview = ref(false)
 const closeDestination = ref<'/study' | '/today'>('/study')
 const config = computed(() => tutor.config)
@@ -57,7 +72,7 @@ function isFullAnswerRequest(value: string) {
 
 async function scrollToBottom() {
   await nextTick()
-  thread.value?.scrollTo({ top: thread.value.scrollHeight, behavior: 'smooth' })
+  thread.value?.scrollTo?.({ top: thread.value.scrollHeight, behavior: 'smooth' })
 }
 
 async function begin() {
@@ -70,6 +85,7 @@ async function begin() {
       knowledge_point: config.value.knowledgePoint, task_type: config.value.taskType,
       material: config.value.material, level: config.value.level,
     })
+    memoryTrace.value = result
     tutor.addMessage({ role: 'assistant', content: result.question, guidanceType: 'question' })
     await scrollToBottom()
   } catch (cause) { error.value = errorMessage(cause) }
@@ -105,6 +121,7 @@ async function send() {
       conversation_history: history,
       ...(requestsFullAnswer ? { guidance_request: 'full_answer' as const } : {}),
     })
+    memoryTrace.value = result
     const content = result.mastery_status === 'ready'
       ? `${result.feedback}\n\n你已经能够较完整地解释并迁移这个知识点，本环节可以完成。`
       : `${result.feedback}${result.question ? `\n\n${result.question}` : ''}`
@@ -125,9 +142,31 @@ async function send() {
   finally { busy.value = false }
 }
 
+async function saveHintPreference() {
+  if (!pendingHintSave.value || hintMemorySaving.value) return
+  hintMemorySaving.value = true
+  hintMemoryError.value = ''
+  try {
+    await submitFeedback(pendingHintSave.value)
+    hintMemorySaved.value = true
+    pendingHintSave.value = null
+  } catch (cause) { hintMemoryError.value = errorMessage(cause) }
+  finally { hintMemorySaving.value = false }
+}
+
 async function chooseHint(preference: HintPreference, messageId: string) {
   if (busy.value || !config.value) return
   const choice = hintOptions.find(item => item.value === preference)!
+  const saveLongTerm = hintPersistence.value === 'long_term'
+  const saveScope = hintScope.value
+  const preferencePayload: FeedbackRequest = {
+    user_id: session.userId, feedback_type: 'explanation_preference', explicit: true,
+    scope: saveScope, course: saveScope === 'global' ? '' : config.value.course,
+    knowledge_point: saveScope === 'knowledge_point' ? config.value.knowledgePoint : undefined,
+    content: ({ example: '先看例子，再讲定义', definition: '先讲定义，再给例子',
+      analogy: '先用类比讲解', diagram: '先看图示或流程图' })[preference],
+  }
+  hintMemorySaved.value = false
   const chooser = tutor.messages.find(message => message.id === messageId)
   if (chooser) chooser.hintChoices = false
   const history = tutor.messages.map(message => ({ role: message.role, content: message.content }))
@@ -143,6 +182,7 @@ async function chooseHint(preference: HintPreference, messageId: string) {
       answer: `我不会，请使用${choice.label}给我一个轻量提示`,
       conversation_history: history, hint_preference: preference,
     })
+    memoryTrace.value = result
     tutor.addMessage({
       role: 'assistant', guidanceType: 'hint',
       content: preference === 'diagram'
@@ -152,6 +192,8 @@ async function chooseHint(preference: HintPreference, messageId: string) {
       visualSteps: preference === 'diagram' ? result.visual_steps : [],
     })
     tutor.masteryStatus = 'ongoing'
+    if (saveLongTerm) { pendingHintSave.value = preferencePayload; await saveHintPreference() }
+    hintPersistence.value = 'once'
     await scrollToBottom()
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -174,32 +216,48 @@ function finishSession() {
   showExitReview.value = true
 }
 
-function leaveSession() {
-  tutor.clear()
-  void router.push(closeDestination.value)
+async function leaveSession() {
+  if (finishing.value || reviewSaving.value) return
+  finishing.value = true
+  reviewError.value = ''
+  try {
+    if (closeDestination.value === '/today' && config.value?.task) {
+      await plans.completeTask(session.userId, { ...config.value.task, course: config.value.course })
+      session.selectedTask = null
+      session.clearFocusProgress()
+    }
+    tutor.clear()
+    await router.push(closeDestination.value)
+  } catch (cause) { reviewError.value = errorMessage(cause) }
+  finally { finishing.value = false }
 }
 
-function addReviewToPlan() {
-  if (!config.value || !tutor.reviewRecommendation || !reviewDate.value) return
-  const dueAt = new Date(`${reviewDate.value}T19:30:00`)
-  plans.addReviewTask({
-    id: `review-${session.userId}-${config.value.course}-${config.value.knowledgePoint}`,
-    course: config.value.course,
-    title: `${config.value.knowledgePoint} · 对话后复习`,
-    description: `根据苏格拉底伴学掌握证据安排：${tutor.masterySummary}`,
-    duration_minutes: tutor.reviewRecommendation.duration_minutes,
-    task_type: 'review', knowledge_point: config.value.knowledgePoint,
-    due_at: dueAt.toISOString(),
-  }, tutor.reviewRecommendation.reason)
-  reviewAdded.value = true
+async function addReviewToPlan() {
+  if (!config.value || !tutor.reviewRecommendation || !reviewDate.value || reviewSaving.value || reviewAdded.value) return
+  reviewSaving.value = true
+  reviewError.value = ''
+  try {
+    const dueAt = new Date(`${reviewDate.value}T19:30:00`)
+    await plans.addReviewTask(session.userId, {
+      id: reviewTaskId,
+      course: config.value.course,
+      title: `${config.value.knowledgePoint} · 对话后复习`,
+      description: `根据苏格拉底伴学掌握证据安排：${tutor.masterySummary}`,
+      duration_minutes: tutor.reviewRecommendation.duration_minutes,
+      task_type: 'review', knowledge_point: config.value.knowledgePoint,
+      due_at: dueAt.toISOString(),
+    }, tutor.reviewRecommendation.reason)
+    reviewAdded.value = true
+  } catch (cause) { reviewError.value = errorMessage(cause) }
+  finally { reviewSaving.value = false }
 }
 
-function addReviewAndLeave() {
+async function addReviewAndLeave() {
   if (reviewAdded.value) {
     leaveSession()
     return
   }
-  addReviewToPlan()
+  await addReviewToPlan()
   if (reviewAdded.value) leaveSession()
 }
 
@@ -212,7 +270,7 @@ onMounted(() => {
 <template>
   <section v-if="config" class="tutor-page">
     <header class="tutor-header">
-      <button class="exit-button" type="button" @click="exitSession">← 退出伴学</button>
+      <button class="exit-button" type="button" :disabled="reviewSaving || finishing" @click="exitSession">← 退出伴学</button>
       <div><p>FLOW TUTOR · SOCRATIC SESSION</p><h1>{{ config.knowledgePoint }}</h1><span>{{ config.course }} · {{ config.level }}</span></div>
       <div class="session-state" :class="tutor.masteryStatus"><i />{{ tutor.masteryStatus === 'ready' ? '可以完成' : '伴学进行中' }}</div>
     </header>
@@ -233,22 +291,27 @@ onMounted(() => {
               <b v-if="index < message.visualSteps.length - 1" class="visual-arrow">↓</b>
             </template>
           </div>
+<div v-if="message.hintChoices" class="hint-preference-controls"><PreferenceOptions v-model:persistence="hintPersistence" v-model:scope="hintScope" :course="config.course" :knowledge-point="config.knowledgePoint" :disabled="busy || hintMemorySaving" /></div>
           <div v-if="message.hintChoices" class="hint-choices">
-            <button v-for="option in hintOptions" :key="option.value" type="button" @click="chooseHint(option.value,message.id)">
+            <button v-for="option in hintOptions" :key="option.value" type="button" :disabled="busy || hintMemorySaving" @click="chooseHint(option.value,message.id)">
               <b>{{ option.icon }}</b><span><strong>{{ option.label }}</strong><small>{{ option.description }}</small></span>
             </button>
           </div>
           <div v-if="message.missingDimensions?.length" class="dimensions"><span v-for="item in message.missingDimensions" :key="item">可补充：{{ item }}</span></div>
         </div>
       </article>
+      <MemoryReference v-if="memoryTrace" compact :retrieved="memoryTrace.retrieved_memory_ids" :used="memoryTrace.used_memory_ids" :candidates="memoryTrace.candidate_memory_ids" :evidence="memoryTrace.memory_evidence" />
+      <div v-if="hintMemorySaved" class="hint-memory-status" role="status">已保存为长期解释偏好，可在个人中心查看或撤销。</div>
+      <div v-if="hintMemoryError" class="hint-memory-failure"><p>本次提示已生成，但长期偏好保存失败。</p><ErrorNotice :message="hintMemoryError" @retry="saveHintPreference" /></div>
       <article v-if="busy" class="message assistant"><div class="avatar assistant-logo"><img :src="studyflowLogo" alt="StudyFlow" /></div><div class="bubble thinking"><i/><i/><i/></div></article>
       <ErrorNotice v-if="error" :message="error" @retry="tutor.messages.length ? send() : begin()" />
-      <div v-if="tutor.masteryStatus === 'ready'" class="complete-card"><span>✓</span><div><b>本环节已达到完成条件</b><p>{{ tutor.masterySummary || '你已经展示了概念解释与迁移证据。它是形成性判断，不等同于严格考试证明。' }}</p></div><button type="button" @click="finishSession">完成并返回任务流</button></div>
+      <div v-if="tutor.masteryStatus === 'ready'" class="complete-card"><span>✓</span><div><b>本环节已达到完成条件</b><p>{{ tutor.masterySummary || '你已经展示了概念解释与迁移证据。它是形成性判断，不等同于严格考试证明。' }}</p></div><button type="button" :disabled="finishing" @click="finishSession">完成并返回任务流</button></div>
       <div v-if="tutor.masteryStatus === 'ready' && tutor.reviewRecommendation" class="review-card">
         <div><small>对话反馈 → 复习建议</small><b>建议再次复习 {{ config.knowledgePoint }}</b><p>{{ tutor.reviewRecommendation.reason }}</p></div>
         <label>复习日期<input v-model="reviewDate" type="date" /></label>
-        <button type="button" :disabled="reviewAdded" @click="addReviewToPlan">{{ reviewAdded ? '已加入计划' : '确认加入计划' }}</button>
+        <button type="button" :disabled="reviewAdded || reviewSaving || finishing" @click="addReviewToPlan">{{ reviewSaving ? '正在保存…' : reviewAdded ? '已加入计划' : '确认加入计划' }}</button>
       </div>
+      <ErrorNotice v-if="reviewError && !showExitReview" :message="reviewError" @retry="addReviewToPlan" />
     </div>
 
     <form class="composer" @submit.prevent="send">
@@ -257,9 +320,9 @@ onMounted(() => {
       <span>Enter 发送 · Flow Tutor 会根据回答选择提示、纠错或完整讲解</span>
     </form>
 
-    <div v-if="showExitReview" class="exit-review-backdrop" @click.self="showExitReview = false">
+    <div v-if="showExitReview" class="exit-review-backdrop" @click.self="!reviewSaving && (showExitReview = false)">
       <section class="exit-review-dialog" role="dialog" aria-modal="true" aria-labelledby="exit-review-title">
-        <button class="dialog-close" type="button" aria-label="关闭" @click="showExitReview = false">×</button>
+        <button class="dialog-close" type="button" :disabled="reviewSaving || finishing" aria-label="关闭" @click="showExitReview = false">×</button>
         <small>SESSION SUMMARY · 会话收尾</small>
         <h2 id="exit-review-title">{{ tutor.reviewRecommendation ? `${config.knowledgePoint} 掌握情况` : '当前证据不足' }}</h2>
         <p class="mastery-evidence">{{ tutor.masterySummary || '本轮尚无可评估的有效回答，因此不会推测你已经掌握或未掌握该知识点。' }}</p>
@@ -267,9 +330,10 @@ onMounted(() => {
           <div><b>建议复习</b><p>{{ tutor.reviewRecommendation.reason }}</p></div>
           <label>安排到哪一天<input v-model="reviewDate" type="date" /></label>
         </div>
+        <ErrorNotice v-if="reviewError" :message="reviewError" />
         <div class="dialog-actions">
-          <button type="button" class="secondary" @click="leaveSession">{{ tutor.reviewRecommendation ? '暂不加入，直接退出' : '确认退出' }}</button>
-          <button v-if="tutor.reviewRecommendation" type="button" class="primary" :disabled="!reviewDate" @click="addReviewAndLeave">{{ reviewAdded ? '已加入，退出' : '加入计划并退出' }}</button>
+          <button type="button" class="secondary" :disabled="reviewSaving || finishing" @click="leaveSession">{{ tutor.reviewRecommendation ? '暂不加入，直接退出' : '确认退出' }}</button>
+          <button v-if="tutor.reviewRecommendation" type="button" class="primary" :disabled="!reviewDate || reviewSaving || finishing" @click="addReviewAndLeave">{{ reviewSaving ? '正在保存…' : reviewAdded ? '已加入，退出' : '加入计划并退出' }}</button>
           <button type="button" class="ghost" @click="showExitReview = false">继续伴学</button>
         </div>
       </section>
@@ -278,6 +342,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.hint-preference-controls{margin:16px 0 12px;padding-top:12px;border-top:1px solid #e0e6f6}.hint-memory-status,.hint-memory-failure{max-width:780px;margin:0 auto 18px;padding:12px 15px;border-radius:13px;background:#eef8f4;color:#3e9577;font-size:11px;line-height:1.8}.hint-memory-failure{background:#faf7f3;color:#ac8655}.hint-memory-failure>p{margin:0 0 8px}
+
 .tutor-page{width:min(980px,calc(100vw - 310px));height:calc(100vh - 70px);display:grid;grid-template-rows:auto 1fr auto;border:1px solid rgba(221,227,247,.9);border-radius:30px;background:rgba(255,255,255,.82);box-shadow:0 24px 70px rgba(70,88,160,.12);overflow:hidden}.tutor-header{min-height:104px;padding:20px 26px;display:grid;grid-template-columns:160px 1fr 150px;align-items:center;border-bottom:1px solid #e9edfa;background:linear-gradient(100deg,#f0fbff,#f4efff)}.exit-button{justify-self:start;border:0;background:transparent;color:#6172b0;font-weight:800}.tutor-header>div:nth-child(2){display:grid;justify-items:center;gap:3px}.tutor-header p{margin:0;color:#677af2;font-size:9px;font-weight:900}.tutor-header h1{margin:0;font-size:25px}.tutor-header span{color:#7b87aa;font-size:10px}.session-state{justify-self:end;padding:9px 13px;border-radius:16px;background:#eef2ff;color:#61709d;font-size:11px;font-weight:800}.session-state i{display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:#6e7ff5}.session-state.ready{background:#e5f8f1;color:#159c72}.session-state.ready i{background:#20b982}.chat-thread{min-height:0;padding:25px 38px 34px;overflow-y:auto}.welcome{margin:0 auto 28px;padding:13px 17px;display:flex;gap:12px;border-radius:16px;background:#f5f7ff;color:#7280a5;font-size:11px}.welcome b{color:#5265d9}.message{margin:0 auto 24px;display:flex;gap:12px;max-width:780px}.message.user{flex-direction:row-reverse}.avatar{width:36px;height:36px;flex:0 0 36px;display:grid;place-items:center;border-radius:12px;background:linear-gradient(135deg,#58dce7,#7e69f2);color:white;font-size:12px;font-weight:900}.user .avatar{background:#e8edff;color:#5d6edc}.bubble{max-width:690px;padding:16px 19px;border-radius:8px 20px 20px 20px;background:#f1f5ff;color:#172052;box-shadow:0 8px 22px rgba(76,93,160,.07)}.user .bubble{border-radius:20px 8px 20px 20px;background:linear-gradient(120deg,#5bd8e6,#7875ee);color:white}.bubble small{display:block;margin-bottom:7px;color:#6375ed;font-size:9px;font-weight:900}.bubble p{margin:0;white-space:pre-line;line-height:1.72;font-size:14px}.dimensions{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.dimensions span{padding:5px 8px;border-radius:11px;background:#fff1e8;color:#ee7c39;font-size:9px}.thinking{display:flex;gap:5px;padding:18px 22px}.thinking i{width:6px;height:6px;border-radius:50%;background:#7a87d9;animation:pulse 1s infinite}.thinking i:nth-child(2){animation-delay:.15s}.thinking i:nth-child(3){animation-delay:.3s}@keyframes pulse{50%{opacity:.3;transform:translateY(-3px)}}.complete-card{margin:20px auto 0;max-width:780px;padding:18px;display:grid;grid-template-columns:42px 1fr auto;align-items:center;gap:13px;border:1px solid #bcebdc;border-radius:20px;background:#effbf7}.complete-card>span{width:42px;height:42px;display:grid;place-items:center;border-radius:50%;background:#28b887;color:#fff;font-weight:900}.complete-card b{color:#137b5b}.complete-card p{margin:5px 0 0;color:#648a7f;font-size:10px}.complete-card button{height:38px;padding:0 14px;border:0;border-radius:13px;background:#25ad80;color:#fff;font-weight:800}.composer{position:relative;margin:0 30px 24px;padding:12px 58px 28px 16px;border:1px solid #dce3f7;border-radius:20px;background:white;box-shadow:0 12px 32px rgba(68,87,160,.12)}.composer textarea{width:100%;resize:none;border:0;outline:0;background:transparent;color:#172052;font:inherit;line-height:1.55}.composer button{position:absolute;right:13px;top:13px;width:38px;height:38px;border:0;border-radius:12px;background:linear-gradient(135deg,#55d9e6,#766df0);color:white;font-size:22px}.composer button:disabled{opacity:.4}.composer>span{position:absolute;left:16px;bottom:8px;color:#9aa4c1;font-size:8px}@media(max-width:1100px){.tutor-page{width:calc(100vw - 270px)}}@media(max-width:760px){.tutor-page{width:100%;height:calc(100vh - 115px);border-radius:22px}.tutor-header{grid-template-columns:90px 1fr 90px;padding:14px}.tutor-header h1{font-size:20px}.session-state{padding:7px;font-size:9px}.chat-thread{padding:18px 14px}.composer{margin:0 12px 12px}.complete-card{grid-template-columns:36px 1fr}.complete-card button{grid-column:1/3}}
 .avatar.assistant-logo{width:42px;height:42px;flex-basis:42px;padding:3px;overflow:hidden;border:1px solid rgba(184,205,255,.8);border-radius:14px;background:rgba(255,255,255,.94);box-shadow:0 8px 20px rgba(80,105,199,.18)}
 .assistant-logo img{display:block;width:100%;height:100%;border-radius:10px;object-fit:cover}
