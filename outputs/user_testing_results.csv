@@ -1,0 +1,11 @@
+﻿timestamp,persona_id,name,dimension,warmup,plan_goal,plan_used_count,plan_modified,plan_accepted,check_used_count,check_accepted,check_answer,check_assessed_level,recover_used_count,recover_continued,understanding,memory_preference,note
+2026-08-26T21:19:24,tester-01,时长偏好型,task_preference：规划时长个性化,feedback,学习图的 BFS,1,0,True,,,,,,,5,5,
+2026-08-26T21:28:33,tester-02,讲解偏好型,explanation_preference：讲解风格个性化,memories,,,,,1,True,极限描述的是函数在某一点附近的值趋近于某个常数 A，用来刻画函数在一点附近的局部变化趋势。,recall,,,5,,
+2026-08-26T21:29:47,tester-03,疲劳恢复型,recovery_experience(fatigue)：疲劳卡点恢复,memories,,,,,,,,,1,True,5,,
+2026-08-26T21:30:04,tester-04,难度卡点型,recovery_experience(too_hard)：难题卡点恢复,memories,,,,,,,,,1,True,5,,
+2026-08-26T21:30:24,tester-05,分心恢复型,recovery_experience(distraction)：分心卡点恢复,memories,,,,,,,,,1,True,5,,
+2026-08-26T21:30:40,tester-06,时间不够型,recovery_experience(time)：时间冲突恢复,memories,,,,,,,,,1,True,5,,
+2026-08-26T21:31:01,tester-07,冷启动型,无记忆：默认策略兜底,none,学习牛顿第二定律,1,1,True,,,,,,,5,,
+2026-08-26T21:32:03,tester-08,跨课程不串型,记忆隔离：高数偏好不串到数据结构,memories,学习链表,0,0,,,,,,,,,,
+2026-08-26T21:32:14,tester-09,冲突偏好型,偏好更新：旧偏好软删除后只用新的,memories,学习快速排序,1,0,True,,,,,,,5,,
+2026-08-26T21:32:29,tester-10,混合全链路型,时长+讲解+恢复三类记忆，plan→check→recover 全链路,feedback,学习图的 DFS,1,0,True,1,True,图的遍历就是按一定顺序系统地访问图中所有顶点、避免遗漏重复；深度优先是沿一条路走到尽头再回溯，解决的是把复杂连接结构里的结点都处理一遍的问题。,recall,1,True,5,5,

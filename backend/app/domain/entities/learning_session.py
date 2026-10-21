@@ -1,0 +1,1 @@
+"""Learning session domain entity."""

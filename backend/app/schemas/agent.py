@@ -1,0 +1,108 @@
+"""Agent 计划、理解检验和恢复 API 模型。"""
+
+from datetime import date, datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from app.domain.value_objects.memory_type import BlockType
+from app.schemas.memory import MemoryOut
+
+
+class ImportedTaskInput(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    due_at: datetime
+
+
+class PlanRequest(BaseModel):
+    user_id: str | None = None
+    course: str
+    goal: str = Field(min_length=1)
+    available_minutes: int = Field(ge=1, le=240)
+    task_type: str = "study"
+    temporary_preference: str | None = Field(default=None, min_length=1, max_length=1000)
+    knowledge_point: str | None = None
+    imported_tasks: list[ImportedTaskInput] = Field(default_factory=list, max_length=50)
+
+
+class TaskOut(BaseModel):
+    id: str
+    title: str
+    description: str
+    duration_minutes: int
+    task_type: str
+    knowledge_point: str | None = None
+    due_at: datetime | None = None
+
+
+class MemoryEvidence(BaseModel):
+    memory: MemoryOut
+    decision: Literal["used", "retrieved_not_used", "pending"]
+    reason: str
+
+
+class PlanResponse(BaseModel):
+    tasks: list[TaskOut]
+    explanation: str
+    retrieved_memory_ids: list[str]
+    used_memory_ids: list[str]
+    candidate_memory_ids: list[str]
+    memory_evidence: list[MemoryEvidence] = Field(default_factory=list)
+    metrics: dict[str, int]
+
+
+class UnderstandingCheckRequest(BaseModel):
+    user_id: str | None = None
+    course: str
+    knowledge_point: str
+    task_type: str = "study"
+    material: str = ""
+    level: Literal["recall", "relate", "transfer"] = "recall"
+    answer: str | None = None
+    conversation_history: list[dict[str, str]] = Field(default_factory=list, max_length=24)
+    hint_preference: Literal["example", "definition", "analogy", "diagram"] | None = None
+    guidance_request: Literal["full_answer"] | None = None
+
+
+class UnderstandingCheckResponse(BaseModel):
+    level: str
+    assessed_level: str | None = None
+    question: str
+    feedback: str
+    missing_dimensions: list[str]
+    guidance_type: Literal["question", "hint", "correction", "full_answer", "encouragement"] = "question"
+    mastery_status: Literal["ongoing", "ready"] = "ongoing"
+    visual_steps: list[str] = Field(default_factory=list)
+    mastery_summary: str | None = None
+    review_recommendation: "ReviewRecommendation | None" = None
+    retrieved_memory_ids: list[str]
+    used_memory_ids: list[str]
+    candidate_memory_ids: list[str]
+    memory_evidence: list[MemoryEvidence] = Field(default_factory=list)
+    metrics: dict[str, int]
+
+
+class ReviewRecommendation(BaseModel):
+    due_date: date
+    duration_minutes: int = Field(ge=5, le=60)
+    reason: str
+
+
+class RecoveryRequest(BaseModel):
+    user_id: str | None = None
+    course: str
+    block_type: BlockType
+    context: str = ""
+    task_type: str = "study"
+    knowledge_point: str | None = None
+    user_acceptance: bool | None = None
+
+
+class RecoveryResponse(BaseModel):
+    action: str
+    reason: str
+    retrieved_memory_ids: list[str]
+    used_memory_ids: list[str]
+    candidate_memory_ids: list[str]
+    memory_evidence: list[MemoryEvidence] = Field(default_factory=list)
+    metrics: dict[str, int]

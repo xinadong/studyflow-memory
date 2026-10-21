@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-08-31T21:04:39",
+  "total": 4,
+  "passed": 4,
+  "cases": [
+    {
+      "id": "boundary-recovery-minutes",
+      "desc": "恢复习惯含「分钟」不再被误判成时长偏好",
+      "ok": true,
+      "memory_type": "recovery_experience",
+      "block_type": "fatigue",
+      "recover_used": 1,
+      "detail": "PASS"
+    },
+    {
+      "id": "boundary-recovery-task-words",
+      "desc": "恢复习惯含任务措辞不再被误判成时长偏好",
+      "ok": true,
+      "memory_type": "recovery_experience",
+      "block_type": "time",
+      "recover_used": 1,
+      "detail": "PASS"
+    },
+    {
+      "id": "boundary-too-hard-vs-explanation",
+      "desc": "「太难」触发词优先于讲解措辞",
+      "ok": true,
+      "memory_type": "recovery_experience",
+      "block_type": "too_hard",
+      "recover_used": null,
+      "detail": "PASS"
+    },
+    {
+      "id": "boundary-review-schedule",
+      "desc": "复习日程措辞优先于分钟/任务措辞",
+      "ok": true,
+      "memory_type": "review_schedule",
+      "block_type": null,
+      "recover_used": null,
+      "detail": "PASS"
+    }
+  ]
+}

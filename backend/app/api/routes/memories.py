@@ -1,0 +1,110 @@
+"""Memory CRUD routes with soft-delete semantics for user operations."""
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import get_current_user, get_db, get_memory_repository
+from app.domain.entities.memory import Memory
+from app.domain.repositories.memory_repository import MemoryFilter, MemoryUpdate as DomainMemoryUpdate
+from app.domain.value_objects.memory_type import BlockType, ConfirmationStatus, MemoryType
+from app.infrastructure.repositories.sqlalchemy_memory_repository import SqlAlchemyMemoryRepository
+from app.infrastructure.models.auth import UserRecord
+from app.memory.policy import soft_delete_memory
+from app.schemas.memory import MemoryCreate, MemoryList, MemoryOut, MemoryUpdate
+from app.memory.versions import add_version, update_version
+
+router = APIRouter()
+
+
+def _out(memory: Memory) -> MemoryOut:
+    return MemoryOut.model_validate(memory)
+
+
+@router.post("/memories", response_model=MemoryOut, status_code=status.HTTP_201_CREATED)
+def create_memory(
+    payload: MemoryCreate,
+    user: UserRecord = Depends(get_current_user),
+    repo: SqlAlchemyMemoryRepository = Depends(get_memory_repository),
+):
+    if payload.memory_type == MemoryType.KNOWLEDGE_STATE:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "unsupported_memory_type",
+                "message": "知识状态必须通过理解检验提交",
+            },
+        )
+    memory = Memory(**payload.model_dump(exclude={"user_id"}), user_id=user.id)
+    saved = add_version(repo, memory)
+    repo.session.commit()
+    return _out(saved)
+
+
+@router.get("/memories", response_model=MemoryList)
+def list_memories(
+    memory_type: MemoryType | None = None,
+    course: str | None = None,
+    task_type: str | None = None,
+    knowledge_point: str | None = None,
+    block_type: BlockType | None = None,
+    confirmation_status: ConfirmationStatus | None = None,
+    active: bool | None = Query(default=True),
+    user: UserRecord = Depends(get_current_user),
+    repo: SqlAlchemyMemoryRepository = Depends(get_memory_repository),
+):
+    items = repo.list(MemoryFilter(
+        user_id=user.id, memory_type=memory_type, course=course, task_type=task_type,
+        knowledge_point=knowledge_point, block_type=block_type,
+        confirmation_status=confirmation_status, active=active,
+    ))
+    return MemoryList(items=[_out(item) for item in items], total=len(items))
+
+
+@router.get("/memories/{memory_id}", response_model=MemoryOut)
+def get_memory(
+    memory_id: str,
+    user: UserRecord = Depends(get_current_user),
+    repo: SqlAlchemyMemoryRepository = Depends(get_memory_repository),
+):
+    memory = _owned(repo, memory_id, user.id)
+    return _out(memory)
+
+
+@router.patch("/memories/{memory_id}", response_model=MemoryOut)
+def update_memory(
+    memory_id: str,
+    payload: MemoryUpdate,
+    user: UserRecord = Depends(get_current_user),
+    repo: SqlAlchemyMemoryRepository = Depends(get_memory_repository),
+):
+    _owned(repo, memory_id, user.id)
+    try:
+        memory = update_version(repo, memory_id, payload.model_dump(exclude_unset=True))
+    except ValueError as error:
+        repo.session.rollback()
+        raise HTTPException(422, str(error)) from error
+    if memory is None:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    repo.session.commit()
+    return _out(memory)
+
+
+@router.delete("/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_memory(
+    memory_id: str,
+    user: UserRecord = Depends(get_current_user),
+    repo: SqlAlchemyMemoryRepository = Depends(get_memory_repository),
+):
+    memory = _owned(repo, memory_id, user.id)
+    # User-facing delete is always a soft delete; repository.delete remains a
+    # low-level physical cleanup method for tests and maintenance jobs.
+    memory = soft_delete_memory(memory)
+    repo.update(memory_id, DomainMemoryUpdate(active=False))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _owned(repo: SqlAlchemyMemoryRepository, memory_id: str, user_id: str) -> Memory:
+    memory = repo.get(memory_id)
+    if memory is None or memory.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return memory
