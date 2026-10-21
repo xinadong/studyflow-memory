@@ -101,19 +101,37 @@ onBeforeUnmount(() => {
 
 <template>
   <section v-if="task" class="focus-page">
-    <header class="focus-header"><span>FOCUS FLOW</span><h1>{{ task.title }}</h1><p>{{ task.description }}</p></header>
+    <header class="focus-header">
+      <div><span class="focus-kicker"><i /> FOCUS FLOW · 专注空间</span><h1>把这一刻，留给专注。</h1><p>不必一次走完所有路，先完成眼前这一小步。</p></div>
+      <span class="session-label">{{ isPreview ? '体验模式' : '当前任务' }} <b>01</b></span>
+    </header>
     <article class="timer-card" :class="{ finished: remainingSeconds === 0 }">
-      <div class="timer-orbit"><div class="timer-core"><small>{{ remainingSeconds === 0 ? '本轮时间已到' : '专注倒计时' }}</small><strong>{{ timeText }}</strong><span>{{ running ? '保持当前节奏' : '计时已暂停' }}</span></div></div>
-      <div class="progress-track"><i :style="{ width: `${progress}%` }" /></div>
-      <p>任务预计 {{ task.duration_minutes }} 分钟 · 离开此页会暂停并保留当前倒计时</p>
+      <div class="focus-workspace">
+        <div class="timer-stage">
+          <div class="stage-top"><span><i :class="{ paused: !running }" />{{ remainingSeconds === 0 ? '本轮结束' : running ? '专注进行中' : '已暂停' }}</span><span>STAY IN THE FLOW</span></div>
+          <div class="timer-orbit">
+            <svg class="timer-ring" viewBox="0 0 300 300" aria-hidden="true"><defs><linearGradient id="focus-ring-gradient" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#42cfdf"/><stop offset=".52" stop-color="#7183f4"/><stop offset="1" stop-color="#a488ed"/></linearGradient></defs><circle class="ring-track" cx="150" cy="150" r="137"/><circle class="ring-progress" cx="150" cy="150" r="137" pathLength="100" :stroke-dasharray="`${progress} 100`"/></svg>
+            <div class="timer-core"><small>{{ remainingSeconds === 0 ? '本轮时间已到' : '剩余专注时间' }}</small><strong>{{ timeText }}</strong><span>{{ remainingSeconds === 0 ? '每一步，都算数' : running ? '让注意力慢慢沉下来' : '准备好后，继续向前' }}</span></div>
+          </div>
+          <div class="stage-bottom"><span>专注当下</span><i /><span>保持自己的节奏</span></div>
+        </div>
+        <div class="session-detail">
+          <span class="detail-kicker">YOUR NEXT SMALL STEP</span>
+          <h2>{{ task.title }}</h2><p class="task-description">{{ task.description }}</p>
+          <div class="session-facts"><div><span>本轮计划</span><strong>{{ task.duration_minutes }}<small> 分钟</small></strong></div><div><span>当前节奏</span><strong class="pace-label">{{ remainingSeconds === 0 ? '已结束' : running ? '专注中' : '已暂停' }}</strong></div></div>
+          <div class="session-progress"><div><span>本轮进度</span><b>{{ Math.round(100 - progress) }}%</b></div><div class="progress-track"><i :style="{ width: `${100 - progress}%` }" /></div></div>
+          <div class="focus-reminder"><span aria-hidden="true">↗</span><p>允许思绪偶尔游走，<br />再轻轻把注意力带回来。</p></div>
+          <p class="autosave-note"><span aria-hidden="true">◷</span> 离开此页会暂停，并保留当前倒计时</p>
+        </div>
+      </div>
       <div v-if="isPreview" class="preview-note" role="note">
         <span class="preview-note-icon" aria-hidden="true">✦</span>
         <div><strong>正在体验示例任务</strong><span>体验记录不会保存，创建自己的任务后即可记录学习进度。</span></div>
         <button type="button" @click="router.push('/today')">去创建任务 <span aria-hidden="true">→</span></button>
       </div>
       <ErrorNotice v-if="saveError" class="focus-save-error" :message="saveError" @retry="finishEarly" />
-      <div class="focus-actions">
-        <button type="button" class="more-time" :disabled="saving" @click="openMoreTime">时间不够</button>
+      <div class="focus-actions"><span class="actions-hint">按你的节奏，灵活调整</span>
+        <button type="button" class="more-time" :disabled="saving" @click="openMoreTime"><span aria-hidden="true">＋</span> 时间不够</button>
         <button type="button" class="finish-early" :disabled="saving" @click="finishEarly">{{ isPreview ? '结束体验' : saving ? '正在保存…' : remainingSeconds === 0 ? '确认完成' : '提前完成' }}</button>
         <button type="button" class="release-thought" :disabled="saving" @click="releaseThought">✦ 杂念释放</button>
       </div>
@@ -142,5 +160,35 @@ onBeforeUnmount(() => {
 .preview-note button:focus-visible{outline:2px solid #697cf3;outline-offset:4px;border-radius:6px}
 .focus-save-error{margin-bottom:18px;text-align:left}
 @media(max-width:520px){.preview-note{flex-wrap:wrap;gap:10px}.preview-note>div{flex-basis:calc(100% - 44px)}.preview-note button{margin-left:44px;padding:0}}
-.focus-page{width:820px;color:#172052}.focus-header{text-align:center;margin:18px 0 28px}.focus-header>span{color:#6379ee;font-size:11px;font-weight:900;letter-spacing:.12em}.focus-header h1{margin:8px 0 6px;font-size:30px}.focus-header p{margin:0;color:#7a86a7;font-size:13px}.timer-card{padding:34px 42px;border:1px solid rgba(255,255,255,.9);border-radius:34px;background:linear-gradient(135deg,rgba(215,249,252,.85),rgba(237,224,255,.82) 53%,rgba(218,228,255,.9));box-shadow:0 24px 60px rgba(80,100,180,.15);text-align:center}.timer-orbit{width:290px;height:290px;margin:0 auto 22px;padding:12px;border-radius:50%;background:conic-gradient(#51dce8,#747df5,#b77cf0,#51dce8);box-shadow:0 18px 42px rgba(101,121,221,.2)}.timer-core{height:100%;display:grid;place-content:center;gap:8px;border-radius:50%;background:rgba(250,252,255,.94);box-shadow:inset 0 0 30px rgba(93,120,226,.1)}.timer-core small{color:#6576d9;font-weight:800}.timer-core strong{font-size:62px;line-height:1;letter-spacing:-2px}.timer-core span{color:#8993ae;font-size:11px}.progress-track{height:7px;overflow:hidden;border-radius:7px;background:rgba(255,255,255,.7)}.progress-track i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#4edce9,#697cf3,#a478ef);transition:width 1s linear}.timer-card>p{margin:12px 0 24px;color:#7a86a7;font-size:11px}.focus-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.focus-actions button{height:48px;border:0;border-radius:16px;font-weight:900;cursor:pointer}.more-time{background:#fff;color:#5269df}.finish-early{background:linear-gradient(90deg,#52d9e6,#657ef1);color:#fff}.release-thought{background:#202b5c;color:#fff}.time-backdrop{position:fixed;z-index:1000;inset:0;display:grid;place-items:center;padding:20px;background:rgba(25,31,70,.3);backdrop-filter:blur(8px)}.time-dialog{position:relative;width:min(430px,100%);padding:28px;border-radius:26px;background:#fff;box-shadow:0 30px 80px rgba(35,47,110,.28);text-align:left}.time-dialog>span{color:#6477e8;font-size:10px;font-weight:900}.time-dialog h2{margin:7px 0 8px;font-size:22px}.time-dialog>p{color:#7a86a7;font-size:12px}.dialog-close{position:absolute;right:20px;top:18px;width:34px;height:34px;border:0;border-radius:50%;background:#eef1fa;color:#7782a0;font-size:20px}.time-dialog label{height:58px;margin:20px 0 8px;display:grid;grid-template-columns:1fr 64px;align-items:center;border:1px solid #dfe4f3;border-radius:16px;overflow:hidden}.time-dialog input{height:100%;min-width:0;padding:0 16px;border:0;outline:0;font-size:25px;font-weight:800}.time-dialog label b{color:#7480a0}.time-error{color:#d9506c!important}.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}.dialog-actions button{height:40px;padding:0 18px;border:0;border-radius:13px;background:#eef1f8;color:#697596;font-weight:800}.dialog-actions .continue-button{background:linear-gradient(90deg,#52d9e6,#7772ef);color:#fff}@media(max-width:760px){.focus-page{width:100%}.timer-card{padding:26px 18px}.timer-orbit{width:230px;height:230px}.timer-core strong{font-size:50px}.focus-actions{grid-template-columns:1fr}}
+.time-backdrop{position:fixed;z-index:1000;inset:0;display:grid;place-items:center;padding:20px;background:rgba(25,31,70,.3);backdrop-filter:blur(8px)}.time-dialog{position:relative;width:min(430px,100%);padding:28px;border-radius:26px;background:#fff;box-shadow:0 30px 80px rgba(35,47,110,.28);text-align:left}.time-dialog>span{color:#6477e8;font-size:10px;font-weight:900}.time-dialog h2{margin:7px 0 8px;font-size:22px}.time-dialog>p{color:#7a86a7;font-size:12px}.dialog-close{position:absolute;right:20px;top:18px;width:34px;height:34px;border:0;border-radius:50%;background:#eef1fa;color:#7782a0;font-size:20px}.time-dialog label{height:58px;margin:20px 0 8px;display:grid;grid-template-columns:1fr 64px;align-items:center;border:1px solid #dfe4f3;border-radius:16px;overflow:hidden}.time-dialog input{height:100%;min-width:0;padding:0 16px;border:0;outline:0;font-size:25px;font-weight:800}.time-dialog label b{color:#7480a0}.time-error{color:#d9506c!important}.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}.dialog-actions button{height:40px;padding:0 18px;border:0;border-radius:13px;background:#eef1f8;color:#697596;font-weight:800}.dialog-actions .continue-button{background:linear-gradient(90deg,#52d9e6,#7772ef);color:#fff}/* Match the shared cyan, blue and lavender theme. */
+.focus-page{width:100%;max-width:820px;padding-top:8px}
+.focus-header{display:flex;align-items:center;justify-content:space-between;gap:20px;text-align:left;margin:8px 0 26px}
+.focus-kicker{display:flex;align-items:center;gap:8px;color:#7b84a6;font-size:9px;font-weight:700;letter-spacing:.13em}
+.focus-kicker i{width:6px;height:6px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 4px #e9ecfc}
+.focus-header h1{margin:14px 0 9px;font-size:29px;font-weight:650;letter-spacing:-1px;color:var(--text)}
+.focus-header p{font-size:11px;color:#929bb4;line-height:1.8}
+.session-label{flex-shrink:0;display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid #e3e7f3;border-radius:10px;color:#8a95b0;font-size:9px;background:#ffffff80}
+.session-label b{border-left:1px solid #e1e5f0;padding-left:12px;color:#63739a;font-size:12px;font-variant-numeric:tabular-nums}
+.timer-card{padding:12px;border:1px solid #e5e9f4;border-radius:26px;background:#ffffffdc;box-shadow:0 16px 48px #283c7c09;text-align:left}
+.focus-workspace{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:0}
+.timer-stage{position:relative;min-width:0;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:23px 23px 22px;min-height:376px;border-radius:19px;border:1px solid #e3e8fa;background:radial-gradient(ellipse at 8% 0%,#d9f7fbcc,transparent 65%),radial-gradient(ellipse at 100% 100%,#e9e0fbc9,transparent 65%),#edf2ff;color:var(--text)}
+.stage-top{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:9px;color:#697ca0}
+.stage-top>span:first-child{display:flex;align-items:center;gap:7px}.stage-top>span:last-child{font-size:7px;letter-spacing:.12em;color:#8d9bbc}
+.stage-top i{width:5px;height:5px;border-radius:50%;background:#40bba4;box-shadow:0 0 0 3px #40bba416}.stage-top i.paused{background:#aa94cf}
+.timer-orbit{position:relative;width:min(100%,278px);height:auto;aspect-ratio:1;margin:20px auto;padding:0;background:transparent;box-shadow:none}
+.timer-ring{position:absolute;inset:0;width:100%;height:100%;overflow:visible;transform:rotate(-90deg)}
+.timer-ring circle{fill:none;stroke-width:3}.ring-track{stroke:#dce4f5}.ring-progress{stroke:url(#focus-ring-gradient);stroke-linecap:round;transition:stroke-dasharray 1s linear;filter:drop-shadow(0 3px 5px #7183f426)}
+.timer-core{position:absolute;inset:15px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;border:1px solid #ffffffdc;background:linear-gradient(145deg,#ffffffcc,#f5f7ffb3);box-shadow:0 12px 35px #7c8fc312,inset 0 2px 14px #ffffff80}
+.timer-core small{color:#7d89b0;font-size:10px;letter-spacing:.12em;font-weight:500}.timer-core strong{font-size:60px;font-weight:400;letter-spacing:-2px;font-variant-numeric:tabular-nums;color:var(--text);line-height:1.1}.timer-core span{color:#8898b8;font-size:10px}
+.stage-bottom{display:flex;align-items:center;justify-content:center;gap:12px;font-size:9px;color:#8a99b8}.stage-bottom i{width:20px;height:1px;background:#becbe3}
+.session-detail{min-width:0;display:flex;flex-direction:column;padding:25px 24px 16px}
+.detail-kicker{color:#98a2bb;font-size:8px;letter-spacing:.12em;font-weight:600}.session-detail h2{margin:14px 0 8px;color:var(--text);font-size:21px;line-height:1.5;font-weight:650;overflow-wrap:anywhere}.task-description{margin:0;color:#8b97b0;font-size:11px;line-height:1.8;overflow-wrap:anywhere}
+.session-facts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:24px 0 20px}.session-facts>div{display:grid;gap:8px}.session-facts>div+div{padding-left:18px;border-left:1px solid #e9edf5}.session-facts span{font-size:9px;color:#94a0b9}.session-facts strong{font-size:26px;color:#4a597d;font-weight:500;line-height:1.2}.session-facts small{font-size:10px;font-weight:400;color:#8a96b1}.session-facts .pace-label{font-size:15px;line-height:31px;color:#659f96}
+.session-progress>div:first-child{display:flex;justify-content:space-between;margin-bottom:9px;font-size:9px;color:#8d99b2}.session-progress b{color:#7387ae;font-weight:500}.progress-track{height:4px;background:#eef1f8}.progress-track i{background:linear-gradient(90deg,#42cfdf,#7183f4,#a488ed)}
+.focus-reminder{display:flex;align-items:flex-start;gap:10px;margin:22px 0 16px;padding:12px;background:#f6f8fc;border-radius:12px;color:#8a98b3}.focus-reminder>span{font-size:18px;color:#8c99c1}.focus-reminder p{margin:0;font-size:10px;line-height:1.85}.autosave-note{margin:auto 0 0;color:#9ba5bb;font-size:8px;line-height:1.8}
+.preview-note{margin:12px 4px 0;padding:13px 12px;border:1px solid #e9edf6;border-radius:12px;background:#f8faff;gap:10px}.preview-note-icon{flex-basis:27px;height:27px;font-size:14px;border-radius:9px}.preview-note strong{font-size:10px}.preview-note>div>span{font-size:9px;color:#8a97b0}.preview-note button{font-size:10px;color:#7b85bc}
+.focus-actions{display:flex;align-items:center;gap:10px;padding:17px 6px 5px;margin-top:4px}.actions-hint{margin-right:auto;color:#9aa4ba;font-size:9px}.focus-actions button{height:39px;padding:0 17px;border-radius:11px;font-size:10px;font-weight:600;transition:background .2s,box-shadow .2s,transform .2s}.focus-actions button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 5px 14px #52639814}.focus-actions button:focus-visible{outline:2px solid #7989d3;outline-offset:3px}.focus-actions button:disabled{opacity:.5;cursor:wait}.more-time{border:1px solid var(--border)!important;background:#f7f9ff;color:var(--brand)}.finish-early{order:3;background:linear-gradient(100deg,#42ccdf,#697df1 70%,#8a77ef);color:#fff;box-shadow:0 5px 14px #697df12b}.release-thought{background:#efebff;color:#8a73be}.focus-save-error{margin:12px 4px}
+.finished .ring-progress{stroke:#51b69a}.finished .timer-core strong{color:#358a74}
+@media(max-width:760px){.focus-page{max-width:100%}.focus-header h1{font-size:25px}.focus-header{margin:4px 0 20px}.session-label{display:none}.focus-workspace{grid-template-columns:1fr}.timer-stage{min-height:340px}.timer-orbit{width:250px;margin:18px auto}.timer-core strong{font-size:56px}.session-detail{padding:24px 16px 12px}.session-detail h2{font-size:20px}.session-facts{margin:18px 0}.focus-reminder{margin:16px 0}.focus-reminder br{display:none}.focus-actions{flex-wrap:wrap;gap:8px}.actions-hint{width:100%;margin:0 0 4px}.focus-actions button{flex:1;padding:0 8px;white-space:nowrap}.preview-note{margin:8px 0 0}.autosave-note{font-size:9px}}
+@media(prefers-reduced-motion:reduce){.ring-progress,.progress-track i,.focus-actions button{transition:none}.focus-actions button:hover:not(:disabled){transform:none}}
 </style>
